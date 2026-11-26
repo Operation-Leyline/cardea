@@ -1,0 +1,41 @@
+[package]
+name = "cardea-cognito"
+description = "The directory table, the Cognito admin calls, the trigger handler and the mail budget"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Decrypts Cognito's custom email sender codes with the AWS Encryption SDK.
+# Off by default: only a function that sends mail needs to compile the SDK.
+email-sender = ["dep:aws-esdk", "dep:aws-sdk-kms"]
+
+[dependencies]
+cardea-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-cognitoidentityprovider = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+# 1.130.0 is tabulary's API floor.
+aws-sdk-dynamodb = { version = "1.130.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+tabulary = { git = "https://github.com/Operation-Leyline/tabulary", rev = "c554b5b16d07aeeb117cf0a3917233a9296507ee" }
+lambda_runtime = "1.4"
+tracing = "0.1"
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+aws-esdk = { version = "=1.2.4", optional = true }
+aws-sdk-kms = { version = "1.114.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+
+[dev-dependencies]
+# Tests build the decryptor too, so one `cargo test --workspace` covers it.
+cardea-cognito = { path = ".", features = ["email-sender"] }
+axum = "0.8"
+dynoxide-rs = { git = "https://github.com/Operation-Leyline/dynoxide", rev = "179e591fac34e362f0fbe40cbacc03f43f162a46", version = "=3.3.0", default-features = false, features = ["native-sqlite", "http-server"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }

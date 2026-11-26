@@ -1,0 +1,25 @@
+{
+  "note": "One spelling per row maps to one person key. cardea-core's person_key runs these rows. Leyline's tools/migrations/person_key.py runs the same rows in its own repository.",
+  "folds": [
+    ["owner@gmail.com", "owner@gmail.com"],
+    ["Owner@Gmail.COM", "owner@gmail.com"],
+    ["o.w.n.e.r@gmail.com", "owner@gmail.com"],
+    ["owner+news@gmail.com", "owner@gmail.com"],
+    ["o.wner+a+b@gmail.com", "owner@gmail.com"],
+    ["owner@googlemail.com", "owner@gmail.com"],
+    ["O.Wner+x@GoogleMail.com", "owner@gmail.com"],
+    ["  owner@gmail.com ", "owner@gmail.com"],
+    ["first.last@example.com", "first.last@example.com"],
+    ["first.last+tag@example.com", "first.last@example.com"],
+    ["First.Last+TAG@Example.COM", "first.last@example.com"],
+    ["owner@googlemail.example.com", "owner@googlemail.example.com"],
+    ["+tag@example.com", "+tag@example.com"],
+    ["+tag@gmail.com", "+tag@gmail.com"],
+    ["...@gmail.com", "...@gmail.com"],
+    ["owner@me.com", "owner@icloud.com"],
+    ["Owner+news@Mac.com", "owner@icloud.com"],
+    ["first.last@icloud.com", "first.last@icloud.com"],
+    ["owner@me.com.example.com", "owner@me.com.example.com"]
+  ],
+  "invalid": ["", "@x", "a@", "a@b@c", "a b@c", "a\n@c", "no-at-sign"]
+}

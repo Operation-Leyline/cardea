@@ -50,11 +50,19 @@ packages are published to GitHub Packages (open question Q1).
 
 ## Person key and email
 
-Moved unchanged from Leyline (`normalize_email`, `person_key`,
+Moved from Leyline (`normalize_email`, `person_key`,
 `same_mailbox`, `same_inbox`): trim and lowercase is the delivery address;
 the person key also drops a `+tag` on every domain, drops dots from a Gmail
 local part and reads `googlemail.com` as `gmail.com`. The disposable-domain
 list and its refresh tool move too.
+
+One rule is new (decided 2026-11-26): the person key also reads `me.com` and
+`mac.com` as `icloud.com`. Apple gives everyone with an `@me.com` or
+`@mac.com` address the matching `@icloud.com` one, and all three reach one
+mailbox (Apple Support, "About iCloud Mail addresses"). It changes the key of
+any existing row on those two domains, so Leyline adoption counts and re-keys
+them. Rows that belong to different accounts can fold into one key, and only
+one can hold it: adoption finds those and settles each before re-keying.
 
 ## Providers
 
@@ -77,9 +85,11 @@ signing in to it first.
 
 `cardea-core` exposes `Provider` (an enum: `Google`, `Apple`; adding one
 is a variant plus its row) and `ProviderIdentity { provider, subject,
-email, authoritative }`, built from verified claims by the provider's rule.
-`resolve_google` becomes `resolve(directory, identity, authenticated_user)`
-with the same steps and the same refusals.
+email, authoritative, private_relay }`, built from verified claims by the
+provider's rule. `resolve_google` becomes `resolve(directory, identity,
+session)` with the same steps and refusals, plus the relay rule below. A
+session is the signed-in caller of a link request: the user, the token's
+`auth_time` and the current time.
 
 ## The directory table
 
@@ -93,7 +103,7 @@ Leyline row moves. Partition key `identityKey`, TTL attribute `expiresAt`.
 | `PROVIDER#Google#{subject}` | unchanged; Google keeps this exact key |
 | `PROVIDER#{Provider}#{subject}` | new providers, same attributes |
 | `LINK#{userId}#{linkId}` | link challenge: provider, nonce, deadline, proof digest, receipt; 24 h TTL |
-| `MAIL#{sha256(personKey)}` / `SEND#{day}`, `DELIVERY#…` | the verification-mail budget (Leyline keeps these in its settings table; the library takes the table name as configuration) |
+| `MAIL#{sha256(personKey)}` / `SEND#{day}`, `RESET#{day}`, `DELIVERY#…` | the mail budget, counted per UTC day: `SEND#` allows 8 signup, resend, attribute-verification and authentication codes, `RESET#` allows 3 password reset codes, so reset requests cannot use up the others; `DELIVERY#` marks a message already counted (Leyline keeps these in its settings table; the library takes the table name as configuration) |
 
 `passwordSet` is new. It is true for a native signup and after a confirmed
 password reset (`PostConfirmation_ConfirmForgotPassword`), and absent for a
@@ -128,11 +138,33 @@ fn main() { cardea_cognito::triggers::run(MyProduct::from_env()) }
 |---|---|
 | `PreSignUp_SignUp` / `_AdminCreateUser` | refuse disposable domains; claim the mailbox (unconfirmed claims lapse after 24 h); never auto-confirm |
 | `PreSignUp_ExternalProvider` | allow only a subject already bound and linked |
-| `InboundFederation_ExternalProvider` | resolve the identity, create the native user if needed, link, return the canonical email. No failed first attempt. |
+| `InboundFederation_ExternalProvider` | resolve the identity, create the native user if needed, link, return every attribute the provider sent with the canonical email in place of its own, and no empty value. No failed first attempt. |
 | `PostConfirmation_ConfirmSignUp` | provision through the product hook |
 | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
-| `PreTokenGeneration` | provision if not yet (operator-created accounts), then the product's claims |
-| `CustomEmailSender_*` | spend the mailbox's daily budget (8), decrypt, hand to `mail()` |
+| `PreTokenGeneration` | provision if not yet (operator-created accounts), then the product's claims; a machine client's `TokenGeneration_ClientCredentials` passes through untouched |
+| `CustomMessage_*` | refuse every `_UpdateUserAttribute`, and `_VerifyUserAttribute` unless `email_verified` is false (below); otherwise return the event untouched |
+| `CustomEmailSender_*` | refuse the same two; spend the mailbox's daily budget (8, or 3 for password resets), decrypt, hand to `mail()` |
+
+**Email changes are refused** (decided 2026-11-26). The pool requires
+verification before a new address replaces the old one, so a change completes
+only with a code, and the library never sends it. The trigger source decides,
+not the address. On a live pool with a change pending,
+`request.userAttributes.email` held the old address in
+`CustomMessage_UpdateUserAttribute`, `CustomMessage_VerifyUserAttribute` and
+`CustomEmailSender_VerifyUserAttribute`, and the new one only in
+`CustomEmailSender_UpdateUserAttribute`; `email_verified` was true in all four.
+Refusing a custom message fails the caller's request. Refusing a custom email
+sender event does not: the caller is told a code was sent, Cognito runs the
+trigger again, and the address stays as it was.
+
+- `_UpdateUserAttribute` is always refused: with verification before update, it
+  only carries a change.
+- `_VerifyUserAttribute` is allowed only when the event's `email_verified` is
+  false, which is verifying the current address. A verified current address
+  leaves only a pending change for the code. A missing or unreadable value is
+  refused too.
+
+A pool that also verified phone numbers would have those codes refused.
 
 ## Sign-in methods and linking
 
@@ -230,6 +262,7 @@ wires the same settings itself; `packages/cdk/README.md` lists them.
 
 GitHub (not OpenID Connect; needs an adapter service), Microsoft, sign-out
 on every device (token revocation), SAML.
+Changing a person's email (needs a verified move of the mailbox claim).
 
 ## Open questions
 
