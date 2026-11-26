@@ -76,8 +76,9 @@ fn no_relay(_domain: &str, _claims: &Value) -> bool {
 }
 
 /// An Apple mailbox that is not a private relay. Apple sends
-/// `is_private_email` as a boolean or a string; any value other than a clear
-/// "no" keeps the sign-in from linking automatically.
+/// `is_private_email` as a boolean or a string, and may leave it out. Absent,
+/// `false` and `"false"` mean not private; any other value keeps the sign-in
+/// from linking automatically.
 fn apple_owns(domain: &str, claims: &Value) -> bool {
     let denied = match &claims["is_private_email"] {
         Value::Null => true,

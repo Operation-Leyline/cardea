@@ -15,6 +15,7 @@
 //! | `PostConfirmation_ConfirmSignUp` | provision through the product |
 //! | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
 //! | `TokenGeneration_*` | provision if not yet, then the product's claims |
+//! | `TokenGeneration_ClientCredentials` | nothing: there is no person |
 //! | `CustomEmailSender_*` | spend the mailbox's budget, decrypt, hand to the product (feature `email-sender`) |
 //!
 //! The handler logs through `tracing`; the product installs the subscriber.
@@ -77,6 +78,9 @@ async fn dispatch(
                 .await?;
             Ok(payload)
         }
+        // A machine client's token has no person behind it: no account to
+        // provision and no user to add claims for.
+        "TokenGeneration_ClientCredentials" => Ok(payload),
         source if source.starts_with("PreSignUp_") => Ok(directory.pre_signup(payload).await?),
         source if source.starts_with("TokenGeneration_") => {
             account::token_generation(directory, product, payload).await

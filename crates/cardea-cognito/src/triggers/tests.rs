@@ -273,11 +273,10 @@ async fn another_user_cannot_be_provisioned_onto_a_bound_mailbox() {
     handle(&fixture.directory, &product, confirm("native-sub"))
         .await
         .unwrap();
-    assert!(
-        handle(&fixture.directory, &product, confirm("intruder"))
-            .await
-            .is_err()
-    );
+    assert!(matches!(
+        handle(&fixture.directory, &product, confirm("intruder")).await,
+        Err(TriggerError::Identity(Error::Conflict))
+    ));
     assert_eq!(product.accounts.lock().unwrap().len(), 1);
 }
 
@@ -388,6 +387,25 @@ async fn a_confirmed_reset_records_the_password_and_provisions_nothing() {
     );
     let row = fixture.item("EMAIL#owner@gmail.com").await.unwrap();
     assert_eq!(row["passwordSet"], Av::Bool(true));
+    assert!(product.accounts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_machine_clients_token_is_left_as_it_is() {
+    let fixture = fixture().await;
+    let mut product = product(&fixture);
+    product
+        .claims
+        .0
+        .insert("custom:tenantId".into(), "ws_1".into());
+    let event = json!({"triggerSource":"TokenGeneration_ClientCredentials","version":"3",
+        "request":{"userAttributes":{}},"response":{}});
+    assert_eq!(
+        handle(&fixture.directory, &product, event.clone())
+            .await
+            .unwrap(),
+        event
+    );
     assert!(product.accounts.lock().unwrap().is_empty());
 }
 
