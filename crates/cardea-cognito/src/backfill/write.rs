@@ -71,9 +71,16 @@ impl AwsDirectory {
         };
         let version = list.version;
         list.entry(identity);
-        Ok(self
+        let sent = self
             .replace_methods_row_binding(version, list, binding)
-            .await?)
+            .await?;
+        match sent {
+            Ok(()) => Ok(true),
+            Err(failed) => match failed.fault() {
+                Some(code) => Err(BackfillError::Write(code)),
+                None => Ok(false),
+            },
+        }
     }
 
     /// Put `row` unless its key holds one: `false` when it does.

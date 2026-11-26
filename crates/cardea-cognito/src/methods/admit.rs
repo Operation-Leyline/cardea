@@ -54,10 +54,10 @@ impl AwsDirectory {
             if let Some(email) = email {
                 entry.email = Some(email.to_owned());
             }
-            if self
+            let sent = self
                 .replace_methods_row_binding(version, next, &binding)
-                .await?
-            {
+                .await?;
+            if sent.is_ok() {
                 return Ok(());
             }
         }

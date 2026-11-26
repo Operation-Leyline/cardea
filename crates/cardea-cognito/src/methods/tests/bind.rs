@@ -92,12 +92,11 @@ async fn a_write_landing_after_erasure_is_removed_by_a_repeat() {
         subject: "google-1".into(),
         record: alice.clone(),
     };
-    assert!(
-        f.directory
-            .replace_methods_row_binding(0, list, &binding)
-            .await
-            .unwrap()
-    );
+    f.directory
+        .replace_methods_row_binding(0, list, &binding)
+        .await
+        .unwrap()
+        .unwrap();
 
     let again = plan_erasure(&f.directory, &alice).await.unwrap();
     let report = erase_user(&f.directory, &again).await.unwrap();

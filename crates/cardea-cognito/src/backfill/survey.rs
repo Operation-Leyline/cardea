@@ -276,12 +276,9 @@ impl AwsDirectory {
             return Ok(());
         }
         // The list first, so that a run that stops leaves no binding without it.
-        let Some(list) = self.survey_list(&user, identities, survey).await? else {
-            return Ok(());
-        };
+        let list = self.survey_list(&user, identities, survey).await?;
         for identity in identities {
-            let listed = list.find(identity).is_some();
-            self.survey_binding(&user, identity, listed, claimants, survey)
+            self.survey_binding(&user, identity, list.as_ref(), claimants, survey)
                 .await?;
         }
         Ok(())
@@ -304,7 +301,7 @@ impl AwsDirectory {
         &self,
         user: &User,
         identity: &Identity,
-        listed: bool,
+        list: Option<&MethodsRow>,
         claimants: &Claimants<'_>,
         survey: &mut Survey,
     ) -> Result<(), BackfillError> {
@@ -324,12 +321,16 @@ impl AwsDirectory {
                 survey.find(&user.user_id, Problem::SubjectBound { provider, holder });
             }
             Ok(None) => {
+                // Beside a list that cannot be read, nothing is bound.
+                let Some(list) = list else {
+                    return Ok(());
+                };
                 let binding = ProviderRow {
                     provider: ProviderRow::provider_name(provider),
                     subject: identity.subject.clone(),
                     record: user.clone(),
                 };
-                survey.missing.push(if listed {
+                survey.missing.push(if list.find(identity).is_some() {
                     Missing::Binding(binding)
                 } else {
                     Missing::Unlisted(identity.clone(), binding)
@@ -345,7 +346,8 @@ impl AwsDirectory {
     }
 
     /// The list the user has, or will have once this pass's rows are written;
-    /// `None` if theirs cannot be read, and then no binding is written either.
+    /// `None` if theirs cannot be read, and then bindings are checked but none
+    /// is written.
     /// A list already there only ever gains the identities it lacks.
     async fn survey_list(
         &self,

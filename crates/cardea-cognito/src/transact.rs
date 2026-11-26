@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use aws_sdk_dynamodb::{
-    Client, error::SdkError, operation::transact_write_items::TransactWriteItemsError,
+    Client,
+    error::{ProvideErrorMetadata, SdkError},
+    operation::transact_write_items::TransactWriteItemsError,
     types::TransactWriteItem,
 };
 
@@ -11,6 +13,33 @@ use aws_sdk_dynamodb::{
 #[derive(Debug, thiserror::Error)]
 #[error("the transaction failed")]
 pub struct TransactError(#[source] pub Box<SdkError<TransactWriteItemsError>>);
+
+impl TransactError {
+    /// AWS's code for what stopped the transaction. `None` when only a
+    /// condition or a race did: the table was not as the writes expected, and
+    /// nothing else was wrong.
+    pub(crate) fn fault(&self) -> Option<String> {
+        fault_in(self.0.as_service_error())
+    }
+}
+
+fn fault_in(error: Option<&TransactWriteItemsError>) -> Option<String> {
+    match error {
+        Some(TransactWriteItemsError::TransactionCanceledException(cancelled)) => cancelled
+            .cancellation_reasons()
+            .iter()
+            .filter_map(|reason| reason.code())
+            .find(|code| {
+                !matches!(
+                    *code,
+                    "None" | "ConditionalCheckFailed" | "TransactionConflict"
+                )
+            })
+            .map(str::to_owned),
+        Some(refused) => Some(refused.code().unwrap_or("unknown error").to_owned()),
+        None => Some("no answer".into()),
+    }
+}
 
 /// Whether a transaction was cancelled only because another transaction held
 /// one of its items: nothing was decided, so the same writes can go again.
@@ -65,6 +94,27 @@ mod tests {
                 .set_cancellation_reasons(Some(reasons))
                 .build(),
         )
+    }
+
+    #[test]
+    fn a_fault_is_anything_but_a_condition_or_a_race() {
+        let fault = |codes: &[&str]| fault_in(Some(&cancelled(codes)));
+        assert_eq!(fault(&["None", "ConditionalCheckFailed"]), None);
+        assert_eq!(fault(&["TransactionConflict", "None"]), None);
+        assert_eq!(
+            fault(&["ConditionalCheckFailed", "ThrottlingError"]),
+            Some("ThrottlingError".into())
+        );
+        let denied = TransactWriteItemsError::generic(
+            aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                .code("AccessDeniedException")
+                .build(),
+        );
+        assert_eq!(
+            fault_in(Some(&denied)),
+            Some("AccessDeniedException".into())
+        );
+        assert_eq!(fault_in(None), Some("no answer".into()));
     }
 
     #[test]

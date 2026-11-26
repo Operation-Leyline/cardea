@@ -201,6 +201,42 @@ async fn unreadable_users_and_rows_block() {
     );
 }
 
+/// The audit goes on past a list that cannot be read, and binds nothing for
+/// its user.
+#[tokio::test]
+async fn an_unreadable_list_hides_no_conflict_and_gets_no_binding() {
+    let f = closed().await;
+    let alice = user(&f, "alice", "CONFIRMED");
+    let bob = user(&f, "bob", "CONFIRMED");
+    f.pool_link("alice", GOOGLE, "google-1");
+    f.pool_link("alice", APPLE, "apple-1");
+    f.unlisted_binding(&bob, GOOGLE, "google-1").await;
+    f.directory
+        .dynamodb()
+        .put_item()
+        .table_name(f.directory.table())
+        .item("identityKey", Av::S(format!("METHODS#{}", alice.user_id)))
+        .item("version", Av::N("1".into()))
+        .item("identities", Av::S("not json".into()))
+        .send()
+        .await
+        .unwrap();
+
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::ActivationRefused);
+    let row = RowKind::Methods;
+    let (provider, holder) = (GOOGLE, bob.user_id);
+    assert_eq!(
+        report.findings,
+        [
+            finding("alice", Problem::UnreadableRow { row }),
+            finding("alice", Problem::SubjectBound { provider, holder }),
+        ]
+    );
+    assert!(!present(&f, "PROVIDER#SignInWithApple#apple-1").await);
+}
+
 #[tokio::test]
 async fn notes_do_not_block() {
     let f = closed().await;

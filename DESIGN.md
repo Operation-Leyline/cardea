@@ -335,8 +335,8 @@ the user it is linked to; that is the same person, and is passed over):
   gets any row), a mailbox row that is another's or under a username the pool no
   longer answers to (the user gets no row), a subject bound elsewhere, a
   binding with an outdated username or address, a lapsing claim on a user past
-  confirmation, and a user or row that cannot be read (an unreadable list also
-  holds back that user's bindings).
+  confirmation, and a user or row that cannot be read (beside an unreadable
+  list, bindings are checked and none is written).
 - **Federated-only users** (`google_…`) get their binding pointing at
   themselves, with a note: Cardea signs people in to native users, and such a
   user cannot sign in until the product converts them. Converting after

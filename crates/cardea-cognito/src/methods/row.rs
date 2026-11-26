@@ -5,6 +5,7 @@ use cardea_core::{Error, Provider, User};
 use tabulary::WriteError;
 
 use crate::{
+    TransactError,
     directory::AwsDirectory,
     record::{LinkedIdentity, MethodsRow, MethodsRowAttrs, MethodsRowKey, ProviderRow},
     transact,
@@ -101,14 +102,14 @@ impl AwsDirectory {
     }
 
     /// [`AwsDirectory::replace_methods_row`] and the creation of `binding`, as
-    /// one transaction. `false` when it was refused or not answered: the caller
-    /// reads both rows again to learn which.
+    /// one transaction. The inner error is a transaction refused or not
+    /// answered.
     pub(crate) async fn replace_methods_row_binding(
         &self,
         read: i64,
         mut next: MethodsRow,
         binding: &ProviderRow,
-    ) -> Result<bool, Error> {
+    ) -> Result<Result<(), TransactError>, Error> {
         next.version = read + 1;
         let rows = self.rows()?;
         let put = rows.put(&next);
@@ -124,6 +125,6 @@ impl AwsDirectory {
             .into_tx()
             .map_err(|_| Error::Invalid)?;
         let items = vec![list.input().clone(), binding.input().clone()];
-        Ok(transact(self.dynamodb(), items).await.is_ok())
+        Ok(transact(self.dynamodb(), items).await)
     }
 }
