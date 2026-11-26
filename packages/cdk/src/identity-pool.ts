@@ -39,8 +39,9 @@ export interface IdentityPoolProps extends UserPoolSettings {
   /**
    * Serve Cognito's managed login on every domain, in Cognito's default style,
    * instead of the classic hosted UI. Only managed login passes
-   * `prompt=select_account` on to Google. Default: false, which leaves the
-   * pages of an existing pool as they are.
+   * `prompt=select_account` on to Google. The domains' version is set either
+   * way, so a pool already on managed login needs true to stay on it.
+   * Default: false, the classic hosted UI.
    */
   readonly managedLogin?: boolean;
   /** Default: no Google sign-in. */
@@ -89,8 +90,11 @@ export class IdentityPool extends Construct {
     grantTriggers(this, this.userPool, this.directory, handler, sender);
 
     const stack = Stack.of(this);
-    // Left unset when off: Cognito's default is the classic hosted UI.
-    const loginVersion = props.managedLogin ? cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN : undefined;
+    // Stated either way: a domain left without the property may keep the version
+    // it had, and turning managed login off also removes the clients' styles.
+    const loginVersion = props.managedLogin
+      ? cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN
+      : cognito.ManagedLoginVersion.CLASSIC_HOSTED_UI;
     this.prefixDomain = this.userPool.addDomain('LoginDomain', {
       cognitoDomain: { domainPrefix: props.domainPrefix ?? `${stack.account}-${stack.region}` },
       managedLoginVersion: loginVersion,

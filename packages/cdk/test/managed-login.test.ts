@@ -8,11 +8,12 @@ const brandedDomain = (stack: Parameters<typeof zone>[0]) => ({
 });
 
 describe('managed login', () => {
-  it.each([undefined, false])('is off with managedLogin %s: classic hosted UI, no styles', (managedLogin) => {
+  it.each([undefined, false])('is off with managedLogin %s: classic hosted UI stated, no styles', (managedLogin) => {
     const { template } = build((stack) => ({ managedLogin, devClient, brandedDomain: brandedDomain(stack) }));
     const domains = Object.values(template.findResources('AWS::Cognito::UserPoolDomain'));
     expect(domains).toHaveLength(2);
-    for (const domain of domains) expect(domain.Properties).not.toHaveProperty('ManagedLoginVersion');
+    // Version 1 is written out so that turning managed login off switches the domain back.
+    expect(domains.map((domain) => domain.Properties.ManagedLoginVersion)).toEqual([1, 1]);
     template.resourceCountIs('AWS::Cognito::ManagedLoginBranding', 0);
   });
 

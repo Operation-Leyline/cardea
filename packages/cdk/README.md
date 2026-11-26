@@ -262,14 +262,24 @@ default style, without which a client has no managed login pages. It needs the
 Essentials or Plus feature plan; the construct does not choose a plan, and
 Cognito's default for a new pool is Essentials.
 
-It is off by default, so adopting a pool does not change the pages its users
-see. While it is off, the web package's Google account chooser does nothing:
+It is off by default. The construct then sets the domains to the classic hosted
+UI (managed login version 1), so adopting a pool that uses it does not change
+the pages its users see, and turning the option off again switches the domains
+back. A pool already on managed login needs `managedLogin: true`, or the deploy
+switches it to the classic pages. While it is off, the web package's Google
+account chooser does nothing:
 only managed login passes
 [`prompt=select_account`](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html)
 on to Google, and the classic hosted UI drops it.
 
-Turning it on changes the sign-in pages. The deploy fails for a client that
-already has a style, because Cognito allows one per client.
+Turning it on changes the sign-in pages, and a client's pages can be
+unavailable between its domain switching and its style being created. The
+version belongs to the domain, so it applies to every client of the pool: give
+any client you add yourself a style too (`AWS::Cognito::ManagedLoginBranding`),
+or it has no sign-in pages. The deploy fails for a client that already has a
+style, because Cognito allows one per client; remove that style first.
+
+Switching an existing stack on or off has not been tried on AWS.
 
 ## Google console
 
@@ -409,7 +419,8 @@ Expect the clients to lose write access to everything but `email` and `name`
 (custom attributes included), the pool to require verification of a new email,
 and, without a custom email sender, a custom message trigger on
 `triggers.handler`. A custom message trigger the pool already has is replaced,
-or removed when there is a sender.
+or removed when there is a sender. The domains gain `ManagedLoginVersion`; see
+[Managed login](#managed-login) if the pool already uses it.
 
 Those changes affect live sign-in, so go in this order:
 
@@ -523,9 +534,10 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   prepared-then-active switch as above.
 - Register `https://<domain>/oauth2/idpresponse` for both domains with both
   providers.
-- Optional [managed login](#managed-login): managed login version 2 on both
-  domains, and for each client a branding style with Cognito's provided values
-  (`CreateManagedLoginBranding`, `useCognitoProvidedValues: true`).
+- Managed login version 1 on both domains. Optional
+  [managed login](#managed-login): version 2 on both, and for each client a
+  branding style with Cognito's provided values (`CreateManagedLoginBranding`,
+  `useCognitoProvidedValues: true`).
 
 ## Development
 
