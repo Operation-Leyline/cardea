@@ -1,4 +1,4 @@
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Aws, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -212,6 +212,29 @@ describe('grantSignInMethods across stacks', () => {
       expect(poolStackPolicies(auth)).toEqual([]);
     },
   );
+
+  const localArn = `arn:aws:iam::${Aws.ACCOUNT_ID}:role/api`;
+
+  it.each(["the pool's stack", 'another stack of the same account'])(
+    'takes the option for a role imported with Aws.ACCOUNT_ID in %s',
+    (where) => {
+      const { other, auth } = stacks();
+      const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });
+      const role = iam.Role.fromRoleArn(where === "the pool's stack" ? auth : other, 'ApiRole', localArn);
+      identity.grantSignInMethods(role, { policyInPoolStack: true });
+      expect(poolStackPolicies(auth)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['another account', elsewhere],
+    ['no account', {}],
+  ])('refuses the option for a role imported with Aws.ACCOUNT_ID in a stack of %s', (_, props) => {
+    const { app, auth } = stacks();
+    const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });
+    const role = iam.Role.fromRoleArn(new Stack(app, 'Elsewhere', props), 'ApiRole', localArn);
+    expect(() => identity.grantSignInMethods(role, { policyInPoolStack: true })).toThrow(/pool's account/);
+  });
 
   it('takes the option when neither stack names an account', () => {
     const app = new App();

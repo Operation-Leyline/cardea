@@ -1,4 +1,4 @@
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Aws, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
@@ -164,6 +164,18 @@ describe('triggers', () => {
         };
       }),
     ).toThrow(/pool's account/);
+  });
+
+  it('grants a trigger function imported with Aws.ACCOUNT_ID in its role ARN', () => {
+    const { template } = build((stack) => ({
+      triggers: {
+        handler: lambda.Function.fromFunctionAttributes(stack, 'Local', {
+          functionArn: 'arn:aws:lambda:us-east-1:111111111111:function:triggers',
+          role: iam.Role.fromRoleArn(stack, 'LocalRole', `arn:aws:iam::${Aws.ACCOUNT_ID}:role/triggers`),
+        }),
+      },
+    }));
+    expect(statements(template).flatMap(actionsOf)).toContain('cognito-idp:AdminLinkProviderForUser');
   });
 
   it('refuses a function whose role it cannot grant', () => {
