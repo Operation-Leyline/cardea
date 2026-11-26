@@ -49,6 +49,16 @@ describe('app clients', () => {
     }
   });
 
+  it('rotates no refresh token on either client, so the refresh flow stays usable', () => {
+    const { template } = build({ devClient, managedLogin: true });
+    const clients = Object.values(template.findResources('AWS::Cognito::UserPoolClient'));
+    expect(clients).toHaveLength(2);
+    for (const { Properties } of clients) {
+      expect(Properties).not.toHaveProperty('RefreshTokenRotation');
+      expect(Properties.ExplicitAuthFlows).toContain('ALLOW_REFRESH_TOKEN_AUTH');
+    }
+  });
+
   it('adds a dev client without putting localhost on the web client', () => {
     const { template } = build({ devClient });
     template.resourceCountIs('AWS::Cognito::UserPoolClient', 2);

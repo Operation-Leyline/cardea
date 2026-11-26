@@ -9,6 +9,7 @@ import { addBrowserClient, addDevClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
 import { addBrandedDomain, BrandedDomainProps } from './domains';
 import { LogicalIds, overrideLogicalIds } from './logical-ids';
+import { addDefaultBranding } from './managed-login';
 import { publishIds } from './parameters';
 import { addApple, addGoogle, ProviderSecretProps } from './providers';
 import { grantSignInMethods, SignInMethodsGrantOptions } from './sign-in-methods';
@@ -35,6 +36,13 @@ export interface IdentityPoolProps extends UserPoolSettings {
   readonly domainPrefix?: string;
   /** Default: only the prefix domain. */
   readonly brandedDomain?: BrandedDomainProps;
+  /**
+   * Serve Cognito's managed login on every domain, in Cognito's default style,
+   * instead of the classic hosted UI. Only managed login passes
+   * `prompt=select_account` on to Google. Default: false, which leaves the
+   * pages of an existing pool as they are.
+   */
+  readonly managedLogin?: boolean;
   /** Default: no Google sign-in. */
   readonly google?: ProviderSecretProps;
   /** Default: no Apple sign-in. */
@@ -81,10 +89,14 @@ export class IdentityPool extends Construct {
     grantTriggers(this, this.userPool, this.directory, handler, sender);
 
     const stack = Stack.of(this);
+    // Left unset when off: Cognito's default is the classic hosted UI.
+    const loginVersion = props.managedLogin ? cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN : undefined;
     this.prefixDomain = this.userPool.addDomain('LoginDomain', {
       cognitoDomain: { domainPrefix: props.domainPrefix ?? `${stack.account}-${stack.region}` },
+      managedLoginVersion: loginVersion,
     });
-    this.brandedDomain = props.brandedDomain && addBrandedDomain(this, this.userPool, props.brandedDomain);
+    this.brandedDomain =
+      props.brandedDomain && addBrandedDomain(this, this.userPool, props.brandedDomain, loginVersion);
     const active = props.brandedDomain?.active ? this.brandedDomain! : this.prefixDomain;
     this.loginUrl = active.baseUrl();
     this.redirectUris = [this.prefixDomain, this.brandedDomain]
@@ -97,6 +109,12 @@ export class IdentityPool extends Construct {
     const clients = { providers, adminPasswordSignIn: props.adminPasswordSignIn };
     this.webClient = addBrowserClient(this.userPool, 'WebClient', props.webClient, clients);
     this.devClient = props.devClient && addDevClient(this.userPool, props.devClient, clients);
+    if (props.managedLogin) {
+      addDefaultBranding(this, 'WebClientBranding', this.userPool, this.webClient, this.prefixDomain);
+      if (this.devClient) {
+        addDefaultBranding(this, 'DevWebClientBranding', this.userPool, this.devClient, this.prefixDomain);
+      }
+    }
 
     overrideLogicalIds(props.logicalIds ?? {}, {
       pool: this.userPool,

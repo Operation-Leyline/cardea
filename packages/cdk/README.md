@@ -8,6 +8,7 @@ The AWS side of [Cardea](../../DESIGN.md) sign-in as one CDK construct,
   authenticator-app second factor, deletion protection, retained;
 - a Cognito prefix domain and, if asked, a branded domain with its
   certificate and Route 53 alias;
+- if asked, [managed login](#managed-login) on those domains;
 - no self-service email change: a new address needs verification, and the
   clients write only `email` and `name`;
 - Google and Sign in with Apple providers from Secrets Manager;
@@ -89,6 +90,7 @@ new IdentityPool(this, 'Identity', {
 | `google`, `apple` | none | `{ secretName }`; with neither, the pool is password only |
 | `domainPrefix` | `{account}-{region}` | Cognito-hosted login prefix |
 | `brandedDomain` | none | `{ domainName, hostedZone, active, certificate? }` |
+| `managedLogin` | `false` | [Managed login](#managed-login) with Cognito's default style, instead of the classic hosted UI |
 | `directory` | new table | `{ tableName?, replicaRegions? }`, or `{ table }` to use an existing one |
 | `logicalIds` | CDK's | Logical ids of resources the stack already has; see [Adopting an existing pool](#adopting-an-existing-pool) |
 | `ssmPrefix` | none | Publishes `user-pool-id`, `web-client-id`, `dev-web-client-id`, `login-domain`, `identities-table` |
@@ -157,13 +159,27 @@ things work together:
 
 - The pool requires a new address to be verified before it replaces the old one
   (`AttributesRequireVerificationBeforeUpdate: [email]`). `UpdateUserAttributes`
-  alone changes nothing.
-- The Cardea handler must refuse the verification message for a changed
-  address: in `CustomEmailSender_*` when there is a custom email sender,
-  otherwise in `CustomMessage_*`, where failing the trigger fails the call. It
-  must return every other custom message event unchanged, or sign-up and
-  password reset mail stops.
+  alone does not change it.
+- The Cardea handler must refuse the messages that carry an email change code,
+  in `CustomEmailSender_*` when there is a custom email sender, otherwise in
+  `CustomMessage_*`. It must return every other custom message event unchanged,
+  or sign-up and password reset mail stops.
 - The web and dev clients write `email` and `name` only.
+
+**The handler cannot find a change by comparing addresses.** On a test pool,
+after a person changed their email and then asked for the code again,
+`request.userAttributes.email` held:
+
+| `triggerSource` | Address in the event |
+|---|---|
+| `CustomMessage_UpdateUserAttribute` | old |
+| `CustomMessage_VerifyUserAttribute` | old |
+| `CustomEmailSender_UpdateUserAttribute` | new |
+| `CustomEmailSender_VerifyUserAttribute` | old |
+
+So it has to decide by `triggerSource`. Not tested: that a custom message
+trigger which fails also fails the call and leaves the address, and where a
+code sent from `VerifyUserAttribute` goes and what it verifies.
 
 **`email` stays writable on purpose.** It is a required attribute, and Cognito
 rejects a client that cannot write one (`Invalid write attributes specified
@@ -181,9 +197,16 @@ says it returns an error. Before real users depend on these clients, sign in
 with Google and with Apple on a test pool, once as a new person and once again,
 and check that both succeed and the account's `email_verified` is `true`.
 
-An operator with AWS credentials can still change an address through the admin
-API; that does not move the directory's ownership either. This behaviour has
-not been tried against AWS.
+An operator with AWS credentials can still change an address:
+`AdminUpdateUserAttributes` with only `email` left it as it was on a test pool,
+and with `email_verified: true` as well it changed at once. That does not move
+the directory's ownership either.
+
+## Refresh tokens
+
+Keep refresh token rotation off; the construct sets none. The web package
+refreshes password sessions through the SDK with the refresh token flow, which
+Cognito does not allow on a client that rotates refresh tokens.
 
 ## Open the directory
 
@@ -229,6 +252,24 @@ Switch to it in two deploys:
 
 Switching before step 2 breaks every provider sign-in. Pool and client ids do
 not change, and the prefix domain stays for rollback.
+
+### Managed login
+
+`managedLogin: true` serves Cognito's
+[managed login](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-managed-login.html)
+on the prefix and branded domains and gives the web and dev clients Cognito's
+default style, without which a client has no managed login pages. It needs the
+Essentials or Plus feature plan; the construct does not choose a plan, and
+Cognito's default for a new pool is Essentials.
+
+It is off by default, so adopting a pool does not change the pages its users
+see. While it is off, the web package's Google account chooser does nothing:
+only managed login passes
+[`prompt=select_account`](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html)
+on to Google, and the classic hosted UI drops it.
+
+Turning it on changes the sign-in pages. The deploy fails for a client that
+already has a style, because Cognito allows one per client.
 
 ## Google console
 
@@ -374,7 +415,7 @@ Those changes affect live sign-in, so go in this order:
 
 1. On a test pool, run the provider sign-in check under
    [Changing email](#changing-email).
-2. Release a handler that refuses the changed-address message and returns every
+2. Release a handler that refuses the email change messages and returns every
    other custom message event unchanged. Only then update the pool.
 3. After the deploy, check sign-up, password reset (the mail must arrive) and
    provider sign-in.
@@ -430,7 +471,8 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   provider version exposes this field of `lambdaConfig`.
 - Optional `customEmailSender` (`V1_0`) with `kmsKeyId` set to a key with
   rotation.
-- Without a custom email sender, `customMessage`.
+- Without a custom email sender, `customMessage`. See
+  [Changing email](#changing-email) for what the handler refuses.
 - Permission for `cognito-idp.amazonaws.com`, with the pool as source ARN, to
   invoke each trigger function.
 
@@ -469,7 +511,8 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
 - OAuth flows enabled: `code` only; scopes `openid`, `email`, `profile`.
 - Identity providers `COGNITO`, `Google`, `SignInWithApple`; the client
   depends on both provider resources.
-- ID and access tokens 1 hour; refresh token 30 days.
+- ID and access tokens 1 hour; refresh token 30 days. Refresh token rotation
+  off: see [Refresh tokens](#refresh-tokens).
 - Production callback and logout URLs only. Put localhost on a second client
   with the same settings.
 
@@ -480,6 +523,9 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   prepared-then-active switch as above.
 - Register `https://<domain>/oauth2/idpresponse` for both domains with both
   providers.
+- Optional [managed login](#managed-login): managed login version 2 on both
+  domains, and for each client a branding style with Cognito's provided values
+  (`CreateManagedLoginBranding`, `useCognitoProvidedValues: true`).
 
 ## Development
 

@@ -46,6 +46,8 @@ export function addBrowserClient(
     writeAttributes: new cognito.ClientAttributes().withStandardAttributes(WRITABLE),
     idTokenValidity: Duration.hours(1),
     accessTokenValidity: Duration.hours(1),
+    // No rotation: the browser refreshes with REFRESH_TOKEN_AUTH, which Cognito
+    // does not allow on a client that rotates refresh tokens.
     refreshTokenValidity: Duration.days(30),
     supportedIdentityProviders: [
       cognito.UserPoolClientIdentityProvider.COGNITO,

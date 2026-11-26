@@ -33,9 +33,11 @@ export function addBrandedDomain(
   scope: Construct,
   userPool: cognito.UserPool,
   props: BrandedDomainProps,
+  managedLoginVersion?: cognito.ManagedLoginVersion,
 ): cognito.UserPoolDomain {
   const domain = userPool.addDomain('BrandedLogin', {
     customDomain: { domainName: props.domainName, certificate: certificateFor(scope, props) },
+    managedLoginVersion,
   });
   new route53.ARecord(scope, 'LoginAlias', {
     zone: props.hostedZone,
