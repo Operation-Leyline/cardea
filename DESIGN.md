@@ -102,8 +102,20 @@ Leyline row moves. Partition key `identityKey`, TTL attribute `expiresAt`.
 | `EMAIL#{personKey}` | the mailbox's owner: email as written, Cognito username, origin, `userId` once provisioned, `unconfirmedExpiresAt`, `passwordInitialization`; new: `passwordSet` |
 | `PROVIDER#Google#{subject}` | unchanged; Google keeps this exact key |
 | `PROVIDER#{Provider}#{subject}` | new providers, same attributes |
-| `LINK#{userId}#{linkId}` | link challenge: provider, nonce, deadline, proof digest, receipt; 24 h TTL |
+| `LINK#{userId}#{linkId}` | link challenge: provider (a row without it is Google), nonce, deadline, proof digest, receipt; 24 h TTL |
+| `METHODS#{userId}` | new: the identities linked onto the user (provider, subject, the email as the provider gave it, whether an unlink is unfinished) and a `version` every write is conditional on |
 | `MAIL#{sha256(personKey)}` / `SEND#{day}`, `RESET#{day}`, `DELIVERY#…` | the mail budget, counted per UTC day: `SEND#` allows 8 signup, resend, attribute-verification and authentication codes, `RESET#` allows 3 password reset codes, so reset requests cannot use up the others; `DELIVERY#` marks a message already counted (Leyline keeps these in its settings table; the library takes the table name as configuration) |
+
+`METHODS#{userId}` exists because nothing else holds what listing and
+unlinking need: Cognito's `identities` attribute carries no email, a
+`PROVIDER#` row holds the account's address, and no other row leads from a
+user to their bindings. A user without the row (every Leyline account at
+adoption) gets one, built from the pool, when first listed, linked or
+unlinked; addresses are null until that identity next signs in or is linked.
+The inbound trigger writes it only when it links or sees a different address.
+Code older than the row never reads this key, so rolling back past it is safe.
+(A `LINK#` challenge written with `provider` does not decode in older code, so
+one in progress during a rollback has to be started again.)
 
 `passwordSet` is new. It is true for a native signup and after a confirmed
 password reset (`PostConfirmation_ConfirmForgotPassword`), and absent for a
@@ -189,10 +201,18 @@ may name its API fields differently and map them in its adapter):
 | `UnlinkSignInMethod` | `provider` | — |
 
 Unlinking never deletes the account or moves data, and an unlinked
-provider identity may then be linked to a different account. Leyline keeps
+provider identity may then be linked to a different account. A provider that
+owns the account's mailbox links it again if the person signs in with it: the
+automatic rule still applies. Leyline keeps
 `CreateGoogleIdentityLink` / `CompleteGoogleIdentityLink` as they are until
 its console moves; the generic operations are additions (no breaking
 change).
+
+An unlink first marks the identities on the `METHODS#` row, conditional on the
+version it counted the remaining methods against, so two unlinks cannot take
+the last two. Then it calls `AdminDisableProviderForUser`, deletes the binding
+and drops the entry; a repeat finds the marks and finishes. A marked identity
+is neither linked nor signed in with until that is done.
 
 **Which identities a signed-in person may link** (decided 2026-11-26):
 

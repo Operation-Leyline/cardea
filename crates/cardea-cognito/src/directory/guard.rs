@@ -6,7 +6,7 @@ use cardea_core::{Directory, Error, normalize_email};
 use tabulary::Update;
 
 use super::{AwsDirectory, email_key};
-use crate::record::EmailRowAttrs;
+use crate::record::{EmailRow, EmailRowAttrs};
 
 impl AwsDirectory {
     /// The condition that no other Cognito user owns this mailbox, binding it
@@ -52,6 +52,29 @@ impl AwsDirectory {
         Ok(guard.input().clone())
     }
 
+    /// Whether the mailbox's `row` is the account `user_id`'s: bound to it,
+    /// or not yet bound and claimed under `username` or held by it in the pool.
+    pub(crate) async fn owns(
+        &self,
+        row: &EmailRow,
+        username: &str,
+        user_id: &str,
+    ) -> Result<bool, Error> {
+        if let Some(bound) = &row.user_id {
+            return Ok(bound == user_id);
+        }
+        // Not provisioned yet: the guard's own test of ownership.
+        if row.record.username == username {
+            return Ok(true);
+        }
+        match self.native_user(&row.record).await {
+            Ok(owner) => Ok(owner.user_id == user_id),
+            Err(Error::Unavailable) => Err(Error::Unavailable),
+            // No confirmed account there, so it is not this one.
+            Err(_) => Ok(false),
+        }
+    }
+
     /// Record that the account chose a password (a confirmed reset): set
     /// `passwordSet` on the mailbox's row, only when that row is this user's.
     /// A mailbox with no row, or another user's, is left alone.
@@ -64,20 +87,7 @@ impl AwsDirectory {
         let Some(row) = self.email_row(email).await? else {
             return Ok(());
         };
-        let owned = match &row.user_id {
-            Some(bound) => bound == user_id,
-            // Not provisioned yet: the guard's own test of ownership.
-            None => {
-                row.record.username == username
-                    || match self.native_user(&row.record).await {
-                        Ok(owner) => owner.user_id == user_id,
-                        Err(Error::Unavailable) => return Err(Error::Unavailable),
-                        // No confirmed account there, so it is not this one.
-                        Err(_) => false,
-                    }
-            }
-        };
-        if !owned {
+        if !self.owns(&row, username, user_id).await? {
             return Ok(());
         }
         let request = self

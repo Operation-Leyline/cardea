@@ -121,6 +121,7 @@ async fn a_new_link_challenge_writes_the_frozen_attributes() {
             token_hash: None,
             provider_subject: None,
             status: None,
+            provider: None,
         })
         .await
         .unwrap();
