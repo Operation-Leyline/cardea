@@ -65,7 +65,7 @@ from the construct: CDK reports a cyclic reference. Give them values their own
 stack already knows:
 
 ```ts
-// In the functions' stack.
+// In the functions' stack. A separate sender function gets the same values.
 const emailKey = new kms.Key(this, 'EmailCodeKey', { enableKeyRotation: true });
 triggers.addEnvironment('IDENTITIES_TABLE', 'example-identities');
 triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', emailKey.keyArn);
@@ -83,7 +83,7 @@ new IdentityPool(this, 'Identity', {
 | Property | Default | Meaning |
 |---|---|---|
 | `triggers.handler` | required | Function for PreSignUp, InboundFederation, PostConfirmation, PreTokenGeneration and, without a custom email sender, CustomMessage |
-| `triggers.customEmailSender` | none | `{ handler?, key? }`; the handler defaults to the trigger function, the key to a new one |
+| `triggers.customEmailSender` | none | `{ handler?, key? }`; the handler defaults to the trigger function, the key to a new one. See [A separate email sender](#a-separate-email-sender) |
 | `webClient` | required | `callbackUrls`, `logoutUrls` of the production app |
 | `devClient` | none | Second client; `http://localhost` or `http://127.0.0.1` URLs only |
 | `adminPasswordSignIn` | `false` | Allow `AdminInitiateAuth` with a password on both clients |
@@ -140,16 +140,41 @@ functions' roles are held to the same rule.
 The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,
 `AdminSetUserPassword` and `AdminLinkProviderForUser` on this pool, read and
 write on the directory table, and, when it is also the email sender,
-`kms:Decrypt` on the email key. A separate sender function gets only the
-decrypt. Everything else is yours: your product's tables, the mail budget
-table, sending mail, and your API's own permissions beyond
-`grantSignInMethods`.
+`kms:Decrypt` on the email key. A [separate sender
+function](#a-separate-email-sender) gets less. Everything else is yours: your
+product's tables, the mail budget table, sending mail, and your API's own
+permissions beyond `grantSignInMethods`.
 
 Do not give a trigger function the pool's id or ARN through
 `addEnvironment`, `addToRolePolicy` or a `grant*` call: the pool depends on
 the function, so that is a cycle CloudFormation refuses. The handler gets the
 pool id in each event. If a trigger function needs another pool permission,
 put it in its own `iam.Policy` attached to the function's role.
+
+### A separate email sender
+
+When `customEmailSender.handler` is not `triggers.handler`, the construct grants
+that function `kms:Decrypt` on the email key, `dynamodb:GetItem` on the
+directory table (and decrypt on the table's own key, if it has one) and
+`cognito-idp:AdminGetUser` on this pool, in a policy the function does not
+depend on.
+
+| Environment variable | Set by |
+|---|---|
+| `IDENTITIES_TABLE` | the construct, for a `lambda.Function` in the pool's stack; otherwise you |
+| `COGNITO_EMAIL_KEY_ARN` | the construct, for a `lambda.Function` in the pool's stack; otherwise you |
+| `MAIL_BUDGET_TABLE` | you: the construct creates no budget table |
+
+An imported function (`IFunction`) must already have all three, and a function
+in another stack must get them from values its own stack knows, as
+[above](#trigger-functions-in-another-stack). Either way the budget table
+(partition key `partitionKey`, sort key `sortKey`, TTL `expiresAt`) and
+`PutItem` and `UpdateItem` on it are yours; the same is true when the trigger
+function sends the mail.
+
+Without the table name, the grant or the pool lookup, the Cardea sender refuses
+attribute verification codes and still sends sign-up and reset mail, so check a
+deployment with an attribute verification code too.
 
 ## Changing email
 
@@ -493,7 +518,10 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   `AdminLinkProviderForUser` on this pool's ARN, in a role policy that the
   function does not depend on (this replaces `ListUsers` on `*`).
 - Read and write on the directory table.
-- `kms:Decrypt` on the email key for the sender.
+- `kms:Decrypt` on the email key for the sender. A sender function of its own
+  also needs `dynamodb:GetItem` on the directory table, `AdminGetUser` on this
+  pool, and the environment in
+  [A separate email sender](#a-separate-email-sender).
 
 **Directory table**
 

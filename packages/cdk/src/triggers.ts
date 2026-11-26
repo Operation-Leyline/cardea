@@ -1,4 +1,4 @@
-import { RemovalPolicy } from 'aws-cdk-lib';
+import { RemovalPolicy, Stack } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -91,7 +91,8 @@ export function wireInboundFederation(userPool: cognito.UserPool, handler: lambd
 /**
  * What the functions may do: the handler finds, creates and links users in
  * this pool and reads and writes the directory; the email sender decrypts
- * codes.
+ * codes, and one that is a function of its own may also look a user and a
+ * directory row up.
  *
  * The pool names the functions as triggers, so a function that depends on the
  * pool closes a loop CloudFormation refuses to deploy. A function depends on
@@ -127,12 +128,32 @@ export function grantTriggers(
   const decrypt = new iam.PolicyStatement({ actions: ['kms:Decrypt'], resources: [sender.key.keyArn] });
   if (sender.handler === handler) {
     policy.addStatements(decrypt);
-  } else {
-    new iam.Policy(scope, 'EmailSenderPolicy', {
-      roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
-      statements: [decrypt],
-    });
+    return;
   }
+  // Reading one user and one row is what the sender needs to judge an
+  // attribute verification code; without it, it refuses every such code.
+  const senderPolicy = new iam.Policy(scope, 'EmailSenderPolicy', {
+    roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
+    statements: [
+      decrypt,
+      new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [directory.tableArn] }),
+      new iam.PolicyStatement({ actions: ['cognito-idp:AdminGetUser'], resources: [userPool.userPoolArn] }),
+    ],
+  });
+  directory.encryptionKey?.grantDecrypt(senderPolicy);
+  setSenderEnvironment(scope, directory, sender);
+}
+
+/**
+ * Tell a sender function defined in this stack where the directory and the key
+ * are. A function in another stack cannot be handed these from here without a
+ * stack cycle, and an imported one cannot be handed anything, so the product
+ * configures those itself.
+ */
+function setSenderEnvironment(scope: Construct, directory: dynamodb.ITable, { handler, key }: EmailSender): void {
+  if (!(handler instanceof lambda.Function) || Stack.of(handler) !== Stack.of(scope)) return;
+  handler.addEnvironment('IDENTITIES_TABLE', directory.tableName);
+  handler.addEnvironment('COGNITO_EMAIL_KEY_ARN', key.keyArn);
 }
 
 function roleOf(scope: Construct, fn: lambda.IFunction, name: string): iam.IRole {

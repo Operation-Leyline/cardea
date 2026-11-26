@@ -1,5 +1,6 @@
 import { App, Aws, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -97,16 +98,102 @@ describe('triggers', () => {
     },
   );
 
-  it('gives a separate sender function decrypt and nothing else', () => {
+  const senderPolicyOf = (template: Template): any[] => {
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const found = policies.filter((p) => JSON.stringify(p.Properties.Roles).includes('Sender'));
+    expect(found).toHaveLength(1);
+    return found[0].Properties.PolicyDocument.Statement;
+  };
+  const environmentOf = (template: Template, name: string): Record<string, unknown> | undefined => {
+    const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
+    const found = functions.filter(([id]) => id.startsWith(name));
+    expect(found).toHaveLength(1);
+    return (found[0][1] as any).Properties.Environment?.Variables;
+  };
+
+  it('lets a separate sender function decrypt, read one directory row and look one user up', () => {
     const { template } = build((stack, handler) => ({
       triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
     }));
+    const [poolId] = only(template, 'AWS::Cognito::UserPool');
+    const [tableId] = only(template, 'AWS::DynamoDB::GlobalTable');
+    const [keyId] = only(template, 'AWS::KMS::Key');
+    const arnOf = (id: string) => ({ 'Fn::GetAtt': [id, 'Arn'] });
+    expect(senderPolicyOf(template)).toEqual([
+      { Action: 'kms:Decrypt', Effect: 'Allow', Resource: arnOf(keyId) },
+      { Action: 'dynamodb:GetItem', Effect: 'Allow', Resource: arnOf(tableId) },
+      { Action: 'cognito-idp:AdminGetUser', Effect: 'Allow', Resource: arnOf(poolId) },
+    ]);
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
-    const sender = policies.filter((p) => JSON.stringify(p.Properties.Roles).includes('Sender'));
-    expect(sender).toHaveLength(1);
-    expect(sender[0].Properties.PolicyDocument.Statement.flatMap(actionsOf)).toEqual(['kms:Decrypt']);
-    const handlerPolicy = policies.find((p) => p !== sender[0]);
+    const handlerPolicy = policies.find((p) => !JSON.stringify(p.Properties.Roles).includes('Sender'));
     expect(handlerPolicy.Properties.PolicyDocument.Statement.flatMap(actionsOf)).not.toContain('kms:Decrypt');
+  });
+
+  it('tells a separate sender function in this stack where the directory and key are', () => {
+    const { template } = build((stack, handler) => ({
+      triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
+    }));
+    const [tableId] = only(template, 'AWS::DynamoDB::GlobalTable');
+    const [keyId] = only(template, 'AWS::KMS::Key');
+    expect(environmentOf(template, 'Sender')).toEqual({
+      IDENTITIES_TABLE: { Ref: tableId },
+      COGNITO_EMAIL_KEY_ARN: { 'Fn::GetAtt': [keyId, 'Arn'] },
+    });
+    expect(environmentOf(template, 'Triggers')).toBeUndefined();
+  });
+
+  it('sets no environment when the handler is the email sender', () => {
+    const { template } = build((_, handler) => ({ triggers: { handler, customEmailSender: {} } }));
+    expect(environmentOf(template, 'Triggers')).toBeUndefined();
+    template.resourceCountIs('AWS::IAM::Policy', 1);
+  });
+
+  it('grants an imported sender function through its role and cannot configure it', () => {
+    const { template } = build((stack, handler) => ({
+      triggers: {
+        handler,
+        customEmailSender: {
+          handler: lambda.Function.fromFunctionAttributes(stack, 'Imported', {
+            functionArn: 'arn:aws:lambda:us-east-1:111111111111:function:sender',
+            role: iam.Role.fromRoleArn(stack, 'SenderRole', 'arn:aws:iam::111111111111:role/Sender'),
+          }),
+        },
+      },
+    }));
+    expect(senderPolicyOf(template).flatMap(actionsOf)).toEqual([
+      'kms:Decrypt',
+      'dynamodb:GetItem',
+      'cognito-idp:AdminGetUser',
+    ]);
+    template.resourceCountIs('AWS::Lambda::Function', 1);
+  });
+
+  it('lets a separate sender decrypt a directory table that has its own key', () => {
+    const { template } = build((stack, handler) => ({
+      triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
+      directory: {
+        table: dynamodb.Table.fromTableAttributes(stack, 'Existing', {
+          tableName: 'example-identities',
+          encryptionKey: kms.Key.fromKeyArn(stack, 'TableKey', 'arn:aws:kms:us-east-1:111111111111:key/table'),
+        }),
+      },
+    }));
+    expect(senderPolicyOf(template)).toContainEqual(
+      expect.objectContaining({ Resource: 'arn:aws:kms:us-east-1:111111111111:key/table' }),
+    );
+    expect(environmentOf(template, 'Sender')).toMatchObject({ IDENTITIES_TABLE: 'example-identities' });
+  });
+
+  it('leaves a separate sender in another stack to configure itself', () => {
+    const app = new App();
+    const functions = new Stack(app, 'Functions', { env });
+    const auth = new Stack(app, 'Auth', { env });
+    new IdentityPool(auth, 'Identity', {
+      triggers: { handler: fn(functions), customEmailSender: { handler: fn(functions, 'Sender') } },
+      webClient,
+    });
+    expect(environmentOf(Template.fromStack(functions), 'Sender')).toBeUndefined();
+    expect(senderPolicyOf(Template.fromStack(auth)).flatMap(actionsOf)).toContain('cognito-idp:AdminGetUser');
   });
 
   it('has no cycle when the product reads the table name and key, or grants its own resources', () => {
