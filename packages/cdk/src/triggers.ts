@@ -144,6 +144,9 @@ export function grantTriggers(
   setSenderEnvironment(scope, directory, sender);
 }
 
+/** What each sender function has been told, so a second pool cannot quietly replace it. */
+const senderSettings = new WeakMap<lambda.Function, string>();
+
 /**
  * Tell a sender function defined in this stack where the directory and the key
  * are. A function in another stack cannot be handed these from here without a
@@ -152,6 +155,14 @@ export function grantTriggers(
  */
 function setSenderEnvironment(scope: Construct, directory: dynamodb.ITable, { handler, key }: EmailSender): void {
   if (!(handler instanceof lambda.Function) || Stack.of(handler) !== Stack.of(scope)) return;
+  const settings = JSON.stringify([directory.tableName, key.keyArn]);
+  if ((senderSettings.get(handler) ?? settings) !== settings) {
+    throw new Error(
+      'customEmailSender.handler already serves a pool with another directory table or email key; ' +
+        'give each such pool a sender function of its own',
+    );
+  }
+  senderSettings.set(handler, settings);
   handler.addEnvironment('IDENTITIES_TABLE', directory.tableName);
   handler.addEnvironment('COGNITO_EMAIL_KEY_ARN', key.keyArn);
 }

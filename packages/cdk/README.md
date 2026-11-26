@@ -165,6 +165,9 @@ depend on.
 | `COGNITO_EMAIL_KEY_ARN` | the construct, for a `lambda.Function` in the pool's stack; otherwise you |
 | `MAIL_BUDGET_TABLE` | you: the construct creates no budget table |
 
+A function the construct configures serves one directory table and one key, so
+two pools in a stack cannot share it unless they share both; synth refuses.
+
 An imported function (`IFunction`) must already have all three, and a function
 in another stack must get them from values its own stack knows, as
 [above](#trigger-functions-in-another-stack). Either way the budget table
@@ -185,26 +188,37 @@ things work together:
 - The pool requires a new address to be verified before it replaces the old one
   (`AttributesRequireVerificationBeforeUpdate: [email]`). `UpdateUserAttributes`
   alone does not change it.
-- The Cardea handler must refuse the messages that carry an email change code,
-  in `CustomEmailSender_*` when there is a custom email sender, otherwise in
-  `CustomMessage_*`. It must return every other custom message event unchanged,
-  or sign-up and password reset mail stops.
+- The Cardea handler must refuse the messages that carry an email change code:
+  every `UpdateUserAttribute` message, and a `VerifyUserAttribute` message
+  whose `email_verified` is `true`; in `CustomEmailSender_*` when there is a
+  custom email sender, otherwise in `CustomMessage_*`. It must return every
+  other custom message event unchanged, or sign-up and password reset mail
+  stops.
 - The web and dev clients write `email` and `name` only.
 
 **The handler cannot find a change by comparing addresses.** On a test pool,
-after a person changed their email and then asked for the code again,
-`request.userAttributes.email` held:
+while a change from a verified address was pending:
 
-| `triggerSource` | Address in the event |
-|---|---|
-| `CustomMessage_UpdateUserAttribute` | old |
-| `CustomMessage_VerifyUserAttribute` | old |
-| `CustomEmailSender_UpdateUserAttribute` | new |
-| `CustomEmailSender_VerifyUserAttribute` | old |
+| `triggerSource` | `userAttributes.email` | `email_verified` | Delivery the API reported |
+|---|---|---|---|
+| `CustomMessage_UpdateUserAttribute` | old | `true` | new |
+| `CustomMessage_VerifyUserAttribute` | old | `true` | old |
+| `CustomEmailSender_UpdateUserAttribute` | new | `true` | new |
+| `CustomEmailSender_VerifyUserAttribute` | old | `true` | old |
 
-So it has to decide by `triggerSource`. Not tested: that a custom message
-trigger which fails also fails the call and leaves the address, and where a
-code sent from `VerifyUserAttribute` goes and what it verifies.
+**What a refusal does**, with a test stub that failed on `UpdateUserAttribute`,
+for both `UpdateUserAttributes` and `AdminUpdateUserAttributes`:
+
+- `CustomMessage`: the call fails (`UserLambdaValidationException`).
+- `CustomEmailSender`: the call succeeds and reports a delivery, because Cognito
+  does not wait for the sender. The failed function was run twice more, about
+  one and three minutes later. Cognito sends nothing itself.
+- Either way the address stayed the old one, still verified, and it alone signed
+  in.
+
+Not tested: what a code from `VerifyUserAttribute` verifies while a change is
+pending, and whether a refused change stays pending (`AdminGetUser` showed no
+sign of a pending change even when there was one).
 
 **`email` stays writable on purpose.** It is a required attribute, and Cognito
 rejects a client that cannot write one (`Invalid write attributes specified

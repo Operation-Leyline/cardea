@@ -5,7 +5,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { describe, expect, it } from 'vitest';
-import { IdentityPool } from '../src';
+import { IdentityPool, IdentityPoolProps } from '../src';
 import { build, env, fn, only, statements, webClient } from './support';
 
 const cognitoActions = [
@@ -182,6 +182,34 @@ describe('triggers', () => {
       expect.objectContaining({ Resource: 'arn:aws:kms:us-east-1:111111111111:key/table' }),
     );
     expect(environmentOf(template, 'Sender')).toMatchObject({ IDENTITIES_TABLE: 'example-identities' });
+  });
+
+  const twoPools = (settings: (stack: Stack) => Partial<IdentityPoolProps>, key: (stack: Stack) => kms.IKey | undefined) => {
+    const stack = new Stack(new App(), 'Test', { env });
+    const sender = fn(stack, 'Sender');
+    const shared = key(stack);
+    const extra = settings(stack);
+    for (const id of ['First', 'Second']) {
+      new IdentityPool(stack, id, {
+        triggers: { handler: fn(stack, `${id}Triggers`), customEmailSender: { handler: sender, key: shared } },
+        webClient,
+        domainPrefix: `example-${id.toLowerCase()}`,
+        ...extra,
+      });
+    }
+    return stack;
+  };
+
+  it('refuses one sender function for two pools that would configure it differently', () => {
+    expect(() => twoPools(() => ({}), () => undefined)).toThrow(/sender function of its own/);
+  });
+
+  it('lets two pools share a sender when they share the directory table and the key', () => {
+    const stack = twoPools(
+      (s) => ({ directory: { table: dynamodb.Table.fromTableName(s, 'Existing', 'example-identities') } }),
+      (s) => new kms.Key(s, 'SharedKey'),
+    );
+    expect(environmentOf(Template.fromStack(stack), 'Sender')).toMatchObject({ IDENTITIES_TABLE: 'example-identities' });
   });
 
   it('leaves a separate sender in another stack to configure itself', () => {
