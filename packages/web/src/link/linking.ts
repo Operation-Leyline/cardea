@@ -1,5 +1,6 @@
 import { decodeJwt } from "jose";
 import type { CardeaClient } from "../client.js";
+import { sendResetCode } from "../cognito/account.js";
 import { CardeaError } from "../errors.js";
 import type { Provider } from "../providers.js";
 import type { Session } from "../session/record.js";
@@ -47,18 +48,30 @@ export interface Linking {
   linkProvider(provider: Provider, options?: ConfirmOptions): Promise<{ userId: string }>;
   listSignInMethods(): Promise<SignInMethod[]>;
   unlinkSignInMethod(provider: Provider): Promise<void>;
-  /** "Set a password" is the forgot-password flow, sent to the signed-in address. */
+  /**
+   * "Set a password" is the forgot-password flow, sent to the signed-in address.
+   * Unlike an anonymous reset, a refusal is reported.
+   */
   requestPasswordSetup(): Promise<void>;
   completePasswordSetup(code: string, password: string): Promise<void>;
   /** Fires after a link, an unlink or a new password. */
   onMethodsChanged(listener: () => void): () => void;
 }
 
+/** How a provider's token is obtained under these settings. */
+export function proofSourceFor(
+  provider: Provider,
+  { proofSources, googleButton, appleRedirectUri }: Omit<LinkingOptions, "client" | "adapter">,
+): ProofSource {
+  const standard = provider === "Google" ? googleProofSource(googleButton) : appleProofSource(appleRedirectUri);
+  return proofSources?.[provider] ?? standard;
+}
+
 export function createLinking(options: LinkingOptions): Linking {
   const { client, adapter } = options;
   const sources: Record<Provider, ProofSource> = {
-    Google: options.proofSources?.Google ?? googleProofSource(options.googleButton),
-    Apple: options.proofSources?.Apple ?? appleProofSource(options.appleRedirectUri),
+    Google: proofSourceFor("Google", options),
+    Apple: proofSourceFor("Apple", options),
   };
   const listeners = new Set<() => void>();
   const changed = () => {
@@ -170,7 +183,7 @@ export function createLinking(options: LinkingOptions): Linking {
       sameAccount(session);
       changed();
     },
-    requestPasswordSetup: async () => client.requestPasswordReset(address()),
+    requestPasswordSetup: async () => sendResetCode(client.config, address()),
     async completePasswordSetup(code, password) {
       await client.resetPassword(address(), code, password);
       changed();

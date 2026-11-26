@@ -168,6 +168,21 @@ describe.each(Object.entries(SOURCES))("importing from %s", (_name, { source, sa
     expect(client.getState().status).toBe("signedOut");
     expect(keys()).toEqual(before);
   });
+
+  it("goes on reporting a failed save after a getter finds nobody signed in", async () => {
+    installFakeCognito();
+    await save();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    const { client } = setup([source]);
+    const token = client.getIdToken();
+    await client.start();
+    await expect(token).resolves.toBeNull();
+    await expect(client.getIdToken()).resolves.toBeNull();
+    expect(client.getState()).toMatchObject({ status: "signedOut", error: { code: "storage-unavailable" } });
+    vi.restoreAllMocks();
+  });
 });
 
 describe("unreadable old values", () => {
@@ -275,6 +290,17 @@ describe("which old session is taken", () => {
     expect(keys()).toEqual([GOOGLE]);
   });
 
+  it("imports a password session whose ID token has no email, but not such a Google one", async () => {
+    const cognito = installFakeCognito();
+    const bare = { id: { email: undefined } };
+    await saveHosted(GOOGLE, bare);
+    await saveSdk({ ...bare, ...EXPIRED });
+    refreshWith(cognito, async () => Response.json(await issueTokens(bare)));
+    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    await client.start();
+    expect(client.getState().session).toMatchObject({ method: "password", email: null });
+  });
+
   it("does nothing against a local simulator, or without the setting", async () => {
     const cognito = installFakeCognito();
     await saveSdk();
@@ -369,6 +395,37 @@ describe("an old session never comes back", () => {
     localStorage.setItem(SESSION_KEY, other);
     await finish();
     expect(localStorage.getItem(SESSION_KEY)).toBe(other);
+  });
+
+  it("is taken over for a caller who asks before start, once", async () => {
+    installFakeCognito();
+    const old = await saveSdk();
+    const { client, events } = setup(sources);
+    await expect(client.getIdToken()).resolves.toBe(old.id_token);
+    await client.start();
+    expect(events).toMatchObject([{ type: "signedIn" }]);
+    expect(events).toHaveLength(1);
+  });
+
+  it("is left alone while a provider sign-in is being finished", async () => {
+    const cognito = installFakeCognito();
+    const redirect = vi.fn();
+    await createCardeaClient(CONFIG, { redirect }).signInWithProvider("Google");
+    const url = new URL(redirect.mock.calls[0][0]);
+    cognito.onToken(async () => Response.json(await issueTokens({ nonce: url.searchParams.get("nonce")! })));
+    await saveSdk({ subject: "grace" });
+    window.history.replaceState(null, "", `/auth/callback?code=c&state=${url.searchParams.get("state")}`);
+    const { client, events } = setup(sources);
+    // Before start, then again once start has cleared the address.
+    const early = client.getIdToken();
+    const started = client.start();
+    const during = client.getIdToken();
+    await expect(early).resolves.toBeNull();
+    await expect(during).resolves.toBeNull();
+    await started;
+    expect(events).toMatchObject([{ type: "signedIn", session: { subject: "ada" } }]);
+    expect(events).toHaveLength(1);
+    expect(keys()).toEqual([SESSION_KEY]);
   });
 
   it("makes callers wait while it is being taken over", async () => {

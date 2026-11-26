@@ -110,7 +110,9 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   let ready = false;
   let failure: CardeaError | null = null;
   let starting: Promise<StartResult> | undefined;
-  let importing: Promise<void> | undefined;
+  // The one import this client may run, started by whoever needs the session first.
+  let takeover: Promise<void> | undefined;
+  let takingOver = false;
   const listeners = new Set<() => void>();
 
   const snapshot = (): AuthState => {
@@ -172,17 +174,35 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     });
   }
 
-  /** Callers that ask while an old session is being taken over wait for it. */
+  /** The page's address, if a provider has just sent the person back to it. */
+  function providerReturn(): URL | null {
+    if (!page) return null;
+    const url = new URL(page.location.href);
+    const answered = ["code", "state", "error"].some((name) => url.searchParams.has(name));
+    return url.pathname === config.callbackPath && answered ? url : null;
+  }
+
+  function beginImport(): void {
+    // A sign-in being finished wins over an old session.
+    if (takeover || !config.importSession.length || providerReturn() || store.read().record) return;
+    takingOver = true;
+    takeover = takeOverOldSession().finally(() => (takingOver = false));
+    // `start` reports the failure.
+    takeover.catch(() => {});
+  }
+
+  /** The record for a caller, who may ask before an effect or the app has run `start`. */
   function afterImport(): Promise<StoredSession | null> {
-    // Without an import there is no wait, so the account is read as of this call.
-    // `start` reports an import's failure.
-    return importing ? importing.catch(() => {}).then(usableRecord) : usableRecord();
+    beginImport();
+    // Without a wait, the account is the one saved as of this call.
+    return takingOver ? takeover!.catch(() => {}).then(usableRecord) : usableRecord();
   }
 
   async function usableRecord(): Promise<StoredSession | null> {
     try {
       const record = await usable();
-      if (failure) {
+      // Finding nobody signed in does not settle an earlier failure.
+      if (failure && record) {
         failure = null;
         publish();
       }
@@ -217,22 +237,21 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
 
   async function run(): Promise<StartResult> {
     let result: StartResult = {};
-    const url = new URL(window.location.href);
-    const onCallback = url.pathname === config.callbackPath;
+    const callback = providerReturn();
     if (store.read().record) forgetLegacy();
-    if (onCallback && ["code", "state", "error"].some((name) => url.searchParams.has(name))) {
-      result = await finishCallback(url);
+    if (callback) {
+      // Finishing it clears the address, so rule out an import first.
+      takeover = Promise.resolve();
+      result = await finishCallback(callback);
     } else {
       // A reload of the emptied callback page has nothing to finish.
-      if (onCallback) result = { returnTo: "/" };
+      if (window.location.pathname === config.callbackPath) result = { returnTo: "/" };
       try {
-        if (config.importSession.length && !store.read().record) {
-          importing = takeOverOldSession().finally(() => (importing = undefined));
-          await importing;
-        }
+        beginImport();
+        await takeover;
         await usableRecord();
       } catch (error) {
-        result.error = error as CardeaError;
+        failure = result.error = error as CardeaError;
       }
     }
     ready = true;

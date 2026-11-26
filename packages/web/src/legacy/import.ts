@@ -54,8 +54,9 @@ export async function importLegacySession(dependencies: ImportDependencies): Pro
     const { subject: recorded, username, ...tokens } = found;
     let record: StoredSession;
     let subject: string;
+    const checks = { allowExpired: true, emailOptional: found.method === "password" };
     try {
-      subject = await verify(tokens, { allowExpired: true, ...(recorded ? { subject: recorded } : {}) });
+      subject = await verify(tokens, { ...checks, ...(recorded ? { subject: recorded } : {}) });
       record = { version: 1, ...tokens, username: usernameOf(tokens.idToken) ?? username ?? subject };
     } catch {
       continue;
@@ -63,7 +64,7 @@ export async function importLegacySession(dependencies: ImportDependencies): Pro
     if (!isFresh(record)) {
       try {
         record = justIssued({ ...record, ...(await tokenSource(record.method)(record)) });
-        await verify(record, { allowExpired: true, subject });
+        await verify(record, { ...checks, subject });
       } catch {
         forgetLegacySessions(config, storage);
         return;

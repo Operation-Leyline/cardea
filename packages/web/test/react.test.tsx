@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { StrictMode, useEffect, useState, type ReactNode } from "react";
+import { StrictMode, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cognitoSdkSession, createCardeaClient, type IdentityLinkAdapter, type SignInMethod } from "../src/index.js";
 import { CardeaProvider, useLinkProvider, useSession, useSignIn, useSignInMethods, type CardeaProviderProps } from "../src/react/index.js";
@@ -34,7 +34,10 @@ describe("useSession", () => {
     expect(result.current).toMatchObject({ status: "signedOut", session: null });
   });
 
-  it("gives a child that asks on mount the token of a session being imported", async () => {
+  it.each([
+    ["an effect", useEffect],
+    ["a layout effect", useLayoutEffect],
+  ])("gives a child that asks on mount, in %s, the token of a session being imported", async (_name, onMount) => {
     installFakeCognito();
     const old = await issueTokens();
     const root = `CognitoIdentityServiceProvider.${CONFIG.clientId}`;
@@ -47,7 +50,7 @@ describe("useSession", () => {
       () => {
         const { getIdToken } = useSession();
         const [token, setToken] = useState<string | null>();
-        useEffect(() => void getIdToken().then(setToken), [getIdToken]);
+        onMount(() => void getIdToken().then(setToken), [getIdToken]);
         return token;
       },
       { client },
@@ -198,6 +201,29 @@ describe("linking hooks", () => {
     expect(result.current.link.status).toBe("idle");
     await waitFor(() => expect(result.current.methods.methods).toEqual([]));
     expect(seen).not.toContainEqual(["grace", 1]);
+  });
+
+  it("uses the provider settings as they are when the link is made", async () => {
+    installFakeCognito();
+    localStorage.setItem(SESSION_KEY, await storedSession());
+    const token = (await issueTokens({ nonce: "n" })).id_token;
+    const source = () => ({ load: async () => {}, request: vi.fn(async () => token) });
+    const [first, second] = [source(), source()];
+    const adapter = fakeAdapter();
+    const client = createCardeaClient(CONFIG);
+    let current = first;
+    const { result, rerender } = renderHook(useLinkProvider, {
+      wrapper: ({ children }) => (
+        <CardeaProvider client={client} linkAdapter={adapter} proofSources={{ Google: current }}>
+          {children}
+        </CardeaProvider>
+      ),
+    });
+    current = second;
+    rerender();
+    await act(() => result.current.link("Google"));
+    expect(first.request).not.toHaveBeenCalled();
+    expect(second.request).toHaveBeenCalled();
   });
 
   it("shows a failed link and refuses to confirm before preparing", async () => {

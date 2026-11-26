@@ -39,14 +39,24 @@ export function resendConfirmationCode(config: ResolvedConfig, email: string): P
 /** Answers that would reveal whether an account exists or is eligible. */
 const ELIGIBILITY = ["UserNotFoundException", "InvalidParameterException", "NotAuthorizedException"];
 
-export function requestPasswordReset(config: ResolvedConfig, email: string): Promise<void> {
+/** Starts the forgot-password flow and reports every refusal. */
+export function sendResetCode(config: ResolvedConfig, email: string): Promise<void> {
   return new Promise((resolve, reject) => {
     createUser(config, email).forgotPassword({
       onSuccess: () => resolve(),
       inputVerificationCode: () => resolve(),
-      onFailure: (error) => (ELIGIBILITY.includes(authErrorCode(error)) ? resolve() : reject(error)),
+      onFailure: reject,
     });
   });
+}
+
+/** For someone not signed in: succeeds whether or not a code could be sent. */
+export async function requestPasswordReset(config: ResolvedConfig, email: string): Promise<void> {
+  try {
+    await sendResetCode(config, email);
+  } catch (error) {
+    if (!ELIGIBILITY.includes(authErrorCode(error))) throw error;
+  }
 }
 
 export function resetPassword(config: ResolvedConfig, email: string, code: string, password: string): Promise<void> {

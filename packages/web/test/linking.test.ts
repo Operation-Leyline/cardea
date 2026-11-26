@@ -6,7 +6,7 @@ import {
   type ProofRequest,
   type ProofSource,
 } from "../src/index.js";
-import { CONFIG, deferred, installFakeCognito, issueTokens, otherTabWrites, SESSION_KEY, storedSession } from "./fakes/cognito.js";
+import { CognitoFailure, CONFIG, deferred, installFakeCognito, issueTokens, otherTabWrites, SESSION_KEY, storedSession } from "./fakes/cognito.js";
 
 /** A provider token as the browser sees it: only the nonce is read here. */
 async function proofToken(nonce: string) {
@@ -187,6 +187,16 @@ describe("sign-in methods", () => {
     });
     await expect(linking.listSignInMethods()).rejects.toMatchObject({ code: "account-changed" });
   });
+
+  it.each(["InvalidParameterException", "NotAuthorizedException", "UserNotFoundException"])(
+    "reports %s to the signed-in person, but not to an anonymous reset",
+    async (code) => {
+      const { cognito, client, linking } = await setup();
+      cognito.operations.ForgotPassword = () => new CognitoFailure(code);
+      await expect(linking.requestPasswordSetup()).rejects.toMatchObject({ code });
+      await expect(client.requestPasswordReset("ada@example.test")).resolves.toBeUndefined();
+    },
+  );
 
   it("sets a password through the forgot-password flow for the signed-in address", async () => {
     const { cognito, linking, changed } = await setup();

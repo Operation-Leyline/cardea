@@ -49,8 +49,8 @@ The pool must also meet these:
 
 Without React, call `await client.start()` once per page load. It restores the
 session, or finishes a provider sign-in on the callback path and returns
-`returnTo` (and `error`) for your router. Subscribe before calling it, and call
-it before asking for tokens. `CardeaProvider` does this for you.
+`returnTo` (and `error`) for your router. Subscribe before calling it.
+`CardeaProvider` does this for you.
 
 ## Sign-in
 
@@ -120,8 +120,9 @@ importSession: [cognitoSdkSession()],
 | `cognitoSdkSession({ prefix })` | The same layout behind `prefix`, and `<prefix>googleSession` (yoru-web's Google sign-in) |
 | `leylineGoogleSession()` | `leyline.google.session.<clientId>.<issuer>` |
 
-`start` reads them, in order, only when there is no session of this package's
-own. Token getters called meanwhile wait.
+They are read once per page load, in order, only when there is no session of
+this package's own: by `start`, or by a token getter called before it. Getters
+wait for the result. Nothing is read on a provider callback.
 
 - Tokens must verify against the pool's keys for this client and issuer
   (signature, purpose, subject; there is no nonce). Anything else is ignored and
@@ -131,6 +132,9 @@ own. Token getters called meanwhile wait.
   is signed out and the old keys are removed.
 - Old keys are removed only after the new session is saved. From then on, every
   sign-in and sign-out removes them, so an old session cannot come back.
+- A Google session also needs an email claim. A password session does not.
+- If the new session cannot be saved, `start` and `useSession().error` report
+  `storage-unavailable`, and the old keys stay.
 - Nothing is imported when `endpoint` is set.
 
 To read another layout, implement `LegacySessionSource`.
@@ -160,6 +164,7 @@ await linking.linkProvider("Google", { container });
 - After a failed completion, `confirm` resends the same token. Prepare again
   to start over.
 - "Set a password" is `requestPasswordSetup` then `completePasswordSetup`.
+  If Cognito will not send the code, `requestPasswordSetup` rejects.
 
 The page's Content Security Policy must allow `accounts.google.com` and
 `appleid.cdn-apple.com`. Google needs the web origin listed as an authorized
