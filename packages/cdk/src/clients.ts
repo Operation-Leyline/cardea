@@ -17,11 +17,12 @@ export interface ClientSettings {
 const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/;
 
 /**
- * What a signed-in person may write about themselves. `email` is here because
- * Cognito refuses a client that cannot write a required attribute, and one with
- * provider sign-in must write what the providers map; the pool's
+ * What an app client may write. `email` is here because Cognito refuses a
+ * client that cannot write a required attribute, and AWS asks a client with
+ * provider sign-in to write what the providers map; the pool's
  * verify-before-update setting is what keeps the address from changing.
- * `email_verified`, which providers also map, is not a client's to write.
+ * `email_verified` is mapped too but cannot be listed: Cognito refuses a client
+ * that names it. See the README, "Changing email".
  */
 const WRITABLE = { email: true, fullname: true };
 

@@ -167,9 +167,19 @@ things work together:
 
 **`email` stays writable on purpose.** It is a required attribute, and Cognito
 rejects a client that cannot write one (`Invalid write attributes specified
-while creating a client`). AWS also requires a client with provider sign-in to
-write the attributes the providers map. `email_verified` is not writable by the
-clients, nor are custom attributes.
+while creating a client`). AWS also asks a client with provider sign-in to
+write the attributes the providers map. Custom attributes are not writable by
+the clients.
+
+**`email_verified` is the exception, and needs a check on AWS.** The providers
+map it, but Cognito refuses a client whose write list names it, with the same
+error. The AWS pages disagree about what a provider sign-in then does: the
+[developer guide](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-specifying-attribute-mapping.html)
+says Cognito leaves the value unset and carries on, the
+[`CreateUserPoolClient` reference](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html)
+says it returns an error. Before real users depend on these clients, sign in
+with Google and with Apple on a test pool, once as a new person and once again,
+and check that both succeed and the account's `email_verified` is `true`.
 
 An operator with AWS credentials can still change an address through the admin
 API; that does not move the directory's ownership either. This behaviour has
@@ -360,6 +370,15 @@ and, without a custom email sender, a custom message trigger on
 `triggers.handler`. A custom message trigger the pool already has is replaced,
 or removed when there is a sender.
 
+Those changes affect live sign-in, so go in this order:
+
+1. On a test pool, run the provider sign-in check under
+   [Changing email](#changing-email).
+2. Release a handler that refuses the changed-address message and returns every
+   other custom message event unchanged. Only then update the pool.
+3. After the deploy, check sign-up, password reset (the mail must arrive) and
+   provider sign-in.
+
 Read the changed properties too. The deploy removes or overwrites settings your
 resources have and the construct does not make, such as names, tags or message
 wording; set those again on the resource (`node.defaultChild`). Match the
@@ -442,8 +461,10 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
 **Web client**
 
 - No secret; prevent user-existence errors.
-- `writeAttributes: ["email", "name"]`: not `email_verified` and no custom
-  attributes. `email` has to stay writable because it is required.
+- `writeAttributes: ["email", "name"]`: no custom attributes, and not
+  `email_verified`, which Cognito refuses in this list. `email` has to stay
+  writable because it is required. Run the provider sign-in check under
+  [Changing email](#changing-email).
 - Explicit auth flows `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH`.
 - OAuth flows enabled: `code` only; scopes `openid`, `email`, `profile`.
 - Identity providers `COGNITO`, `Google`, `SignInWithApple`; the client
