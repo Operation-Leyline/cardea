@@ -28,6 +28,12 @@ describe('user pool', () => {
     });
   });
 
+  it('keeps the old address until a new one is verified', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      UserAttributeUpdateSettings: { AttributesRequireVerificationBeforeUpdate: ['email'] },
+    });
+  });
+
   it('is protected from deletion and retained by default', () => {
     const [, pool] = only(template, 'AWS::Cognito::UserPool');
     expect(pool.Properties.DeletionProtection).toBe('ACTIVE');

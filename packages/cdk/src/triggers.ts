@@ -49,7 +49,15 @@ export function emailSender(
   };
 }
 
-/** The triggers CDK's pool takes directly. Inbound federation is added by {@link wireInboundFederation}. */
+/**
+ * The triggers CDK's pool takes directly. Inbound federation is added by
+ * {@link wireInboundFederation}.
+ *
+ * Without a custom email sender, Cognito writes its own messages and asks the
+ * handler through the custom message trigger first, so the handler can refuse
+ * one (the code that would complete an email change) and the call fails. With a
+ * sender, the handler withholds the code there instead.
+ */
 export function lambdaTriggers(
   handler: lambda.IFunction,
   sender: EmailSender | undefined,
@@ -60,7 +68,7 @@ export function lambdaTriggers(
       postConfirmation: handler,
       preTokenGeneration: handler,
       // CDK treats a present key as a trigger, even when it is undefined.
-      ...(sender && { customEmailSender: sender.handler }),
+      ...(sender ? { customEmailSender: sender.handler } : { customMessage: handler }),
     },
     customSenderKmsKey: sender?.key,
   };

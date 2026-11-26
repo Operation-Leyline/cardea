@@ -17,7 +17,7 @@ const cognitoActions = [
 const actionsOf = (statement: any): string[] => [statement.Action].flat();
 
 describe('triggers', () => {
-  it('wires the four triggers to the handler', () => {
+  it('wires the four triggers and the custom message trigger to the handler', () => {
     const { template } = build();
     const [functionId] = only(template, 'AWS::Lambda::Function');
     const arn = { 'Fn::GetAtt': [functionId, 'Arn'] };
@@ -26,8 +26,11 @@ describe('triggers', () => {
       PreSignUp: arn,
       PostConfirmation: arn,
       PreTokenGeneration: arn,
+      CustomMessage: arn,
       InboundFederation: { LambdaArn: arn, LambdaVersion: 'V1_0' },
     });
+    // Cognito may invoke the handler for each trigger, custom message included.
+    template.resourceCountIs('AWS::Lambda::Permission', 4);
     template.hasResourceProperties('AWS::Lambda::Permission', {
       Action: 'lambda:InvokeFunction',
       Principal: 'cognito-idp.amazonaws.com',
@@ -75,6 +78,24 @@ describe('triggers', () => {
     });
     expect(statements(template)).toContainEqual({ Action: 'kms:Decrypt', Effect: 'Allow', Resource: keyArn });
   });
+
+  it.each(['the handler', 'its own function'])(
+    'wires no custom message trigger when the email sender is %s',
+    (sender) => {
+      const { template } = build((stack, handler) => ({
+        triggers: { handler, customEmailSender: sender === 'the handler' ? {} : { handler: fn(stack, 'Sender') } },
+      }));
+      const [, pool] = only(template, 'AWS::Cognito::UserPool');
+      expect(Object.keys(pool.Properties.LambdaConfig).sort()).toEqual([
+        'CustomEmailSender',
+        'InboundFederation',
+        'KMSKeyID',
+        'PostConfirmation',
+        'PreSignUp',
+        'PreTokenGeneration',
+      ]);
+    },
+  );
 
   it('gives a separate sender function decrypt and nothing else', () => {
     const { template } = build((stack, handler) => ({

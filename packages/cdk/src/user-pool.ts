@@ -43,6 +43,10 @@ export function createUserPool(
       requireSymbols: false,
     },
     accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+    // Changing email is not supported: mailbox ownership in the directory would
+    // not follow, and the person would be refused at sign-in. A new address
+    // takes effect only once verified, and the trigger handler withholds that code.
+    keepOriginal: { email: true },
     // Authenticator apps only. With SMS off, CDK creates no SMS role.
     mfa: cognito.Mfa.OPTIONAL,
     mfaSecondFactor: { otp: true, sms: false },

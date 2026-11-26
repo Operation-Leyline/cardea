@@ -17,6 +17,15 @@ export interface ClientSettings {
 const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/;
 
 /**
+ * What a signed-in person may write about themselves. `email` is here because
+ * Cognito refuses a client that cannot write a required attribute, and one with
+ * provider sign-in must write what the providers map; the pool's
+ * verify-before-update setting is what keeps the address from changing.
+ * `email_verified`, which providers also map, is not a client's to write.
+ */
+const WRITABLE = { email: true, fullname: true };
+
+/**
  * A public browser client: no secret, SRP for passwords, the authorization
  * code grant for the hosted flow, and no hint whether an account exists.
  */
@@ -33,6 +42,7 @@ export function addBrowserClient(
     generateSecret: false,
     authFlows: { userSrp: true, adminUserPassword: adminPasswordSignIn },
     preventUserExistenceErrors: true,
+    writeAttributes: new cognito.ClientAttributes().withStandardAttributes(WRITABLE),
     idTokenValidity: Duration.hours(1),
     accessTokenValidity: Duration.hours(1),
     refreshTokenValidity: Duration.days(30),

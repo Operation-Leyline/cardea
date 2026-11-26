@@ -8,6 +8,8 @@ The AWS side of [Cardea](../../DESIGN.md) sign-in as one CDK construct,
   authenticator-app second factor, deletion protection, retained;
 - a Cognito prefix domain and, if asked, a branded domain with its
   certificate and Route 53 alias;
+- no self-service email change: a new address needs verification, and the
+  clients write only `email` and `name`;
 - Google and Sign in with Apple providers from Secrets Manager;
 - a secretless web client (SRP and authorization code grant; ID and access
   tokens 1 hour, refresh 30 days) and an optional localhost client;
@@ -79,7 +81,7 @@ new IdentityPool(this, 'Identity', {
 
 | Property | Default | Meaning |
 |---|---|---|
-| `triggers.handler` | required | Function for PreSignUp, InboundFederation, PostConfirmation and PreTokenGeneration |
+| `triggers.handler` | required | Function for PreSignUp, InboundFederation, PostConfirmation, PreTokenGeneration and, without a custom email sender, CustomMessage |
 | `triggers.customEmailSender` | none | `{ handler?, key? }`; the handler defaults to the trigger function, the key to a new one |
 | `webClient` | required | `callbackUrls`, `logoutUrls` of the production app |
 | `devClient` | none | Second client; `http://localhost` or `http://127.0.0.1` URLs only |
@@ -146,6 +148,32 @@ Do not give a trigger function the pool's id or ARN through
 the function, so that is a cycle CloudFormation refuses. The handler gets the
 pool id in each event. If a trigger function needs another pool permission,
 put it in its own `iam.Policy` attached to the function's role.
+
+## Changing email
+
+Changing email is not supported in v1: the directory's ownership of the
+mailbox does not move with it, so the person would be refused at sign-in. Three
+things work together:
+
+- The pool requires a new address to be verified before it replaces the old one
+  (`AttributesRequireVerificationBeforeUpdate: [email]`). `UpdateUserAttributes`
+  alone changes nothing.
+- The Cardea handler must refuse the verification message for a changed
+  address: in `CustomEmailSender_*` when there is a custom email sender,
+  otherwise in `CustomMessage_*`, where failing the trigger fails the call. It
+  must return every other custom message event unchanged, or sign-up and
+  password reset mail stops.
+- The web and dev clients write `email` and `name` only.
+
+**`email` stays writable on purpose.** It is a required attribute, and Cognito
+rejects a client that cannot write one (`Invalid write attributes specified
+while creating a client`). AWS also requires a client with provider sign-in to
+write the attributes the providers map. `email_verified` is not writable by the
+clients, nor are custom attributes.
+
+An operator with AWS credentials can still change an address through the admin
+API; that does not move the directory's ownership either. This behaviour has
+not been tried against AWS.
 
 ## Open the directory
 
@@ -326,6 +354,12 @@ resource removed (orphaned, when it is retained) and another added. Refuse that
 for the same resources. The Lambda invoke permissions and the trigger's IAM
 policy do get new ids, and that is expected.
 
+Expect the clients to lose write access to everything but `email` and `name`
+(custom attributes included), the pool to require verification of a new email,
+and, without a custom email sender, a custom message trigger on
+`triggers.handler`. A custom message trigger the pool already has is replaced,
+or removed when there is a sender.
+
 Read the changed properties too. The deploy removes or overwrites settings your
 resources have and the construct does not make, such as names, tags or message
 wording; set those again on the resource (`node.defaultChild`). Match the
@@ -363,6 +397,9 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
 - Password: at least 12 characters; lower case, upper case and digit
   required; symbols not required.
 - Account recovery: `verified_email` only.
+- Verify a new address before it replaces the old one
+  (`userAttributeUpdateSettings.attributesRequireVerificationBeforeUpdate:
+  ["email"]`). See [Changing email](#changing-email).
 - MFA optional, software token only; no SMS configuration.
 - Deletion protection active, and the resource protected and retained in
   production.
@@ -374,6 +411,7 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   provider version exposes this field of `lambdaConfig`.
 - Optional `customEmailSender` (`V1_0`) with `kmsKeyId` set to a key with
   rotation.
+- Without a custom email sender, `customMessage`.
 - Permission for `cognito-idp.amazonaws.com`, with the pool as source ARN, to
   invoke each trigger function.
 
@@ -404,6 +442,8 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
 **Web client**
 
 - No secret; prevent user-existence errors.
+- `writeAttributes: ["email", "name"]`: not `email_verified` and no custom
+  attributes. `email` has to stay writable because it is required.
 - Explicit auth flows `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH`.
 - OAuth flows enabled: `code` only; scopes `openid`, `email`, `profile`.
 - Identity providers `COGNITO`, `Google`, `SignInWithApple`; the client
