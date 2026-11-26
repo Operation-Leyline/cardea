@@ -5,7 +5,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { describe, expect, it } from 'vitest';
-import { IdentityPool, IdentityPoolProps } from '../src';
+import { IdentityPool } from '../src';
 import { build, env, fn, only, statements, webClient } from './support';
 
 const cognitoActions = [
@@ -111,32 +111,25 @@ describe('triggers', () => {
     return (found[0][1] as any).Properties.Environment?.Variables;
   };
 
-  it('lets a separate sender function decrypt, read one directory row and look one user up', () => {
+  it('lets a separate sender function decrypt and nothing else', () => {
     const { template } = build((stack, handler) => ({
       triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
     }));
-    const [poolId] = only(template, 'AWS::Cognito::UserPool');
-    const [tableId] = only(template, 'AWS::DynamoDB::GlobalTable');
     const [keyId] = only(template, 'AWS::KMS::Key');
-    const arnOf = (id: string) => ({ 'Fn::GetAtt': [id, 'Arn'] });
     expect(senderPolicyOf(template)).toEqual([
-      { Action: 'kms:Decrypt', Effect: 'Allow', Resource: arnOf(keyId) },
-      { Action: 'dynamodb:GetItem', Effect: 'Allow', Resource: arnOf(tableId) },
-      { Action: 'cognito-idp:AdminGetUser', Effect: 'Allow', Resource: arnOf(poolId) },
+      { Action: 'kms:Decrypt', Effect: 'Allow', Resource: { 'Fn::GetAtt': [keyId, 'Arn'] } },
     ]);
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
     const handlerPolicy = policies.find((p) => !JSON.stringify(p.Properties.Roles).includes('Sender'));
     expect(handlerPolicy.Properties.PolicyDocument.Statement.flatMap(actionsOf)).not.toContain('kms:Decrypt');
   });
 
-  it('tells a separate sender function in this stack where the directory and key are', () => {
+  it('tells a separate sender function in this stack which key to use, and nothing else', () => {
     const { template } = build((stack, handler) => ({
       triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
     }));
-    const [tableId] = only(template, 'AWS::DynamoDB::GlobalTable');
     const [keyId] = only(template, 'AWS::KMS::Key');
     expect(environmentOf(template, 'Sender')).toEqual({
-      IDENTITIES_TABLE: { Ref: tableId },
       COGNITO_EMAIL_KEY_ARN: { 'Fn::GetAtt': [keyId, 'Arn'] },
     });
     expect(environmentOf(template, 'Triggers')).toBeUndefined();
@@ -160,15 +153,11 @@ describe('triggers', () => {
         },
       },
     }));
-    expect(senderPolicyOf(template).flatMap(actionsOf)).toEqual([
-      'kms:Decrypt',
-      'dynamodb:GetItem',
-      'cognito-idp:AdminGetUser',
-    ]);
+    expect(senderPolicyOf(template).flatMap(actionsOf)).toEqual(['kms:Decrypt']);
     template.resourceCountIs('AWS::Lambda::Function', 1);
   });
 
-  it('lets a separate sender decrypt a directory table that has its own key', () => {
+  it('gives a separate sender no access to a directory table that has its own key', () => {
     const { template } = build((stack, handler) => ({
       triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
       directory: {
@@ -178,38 +167,32 @@ describe('triggers', () => {
         }),
       },
     }));
-    expect(senderPolicyOf(template)).toContainEqual(
-      expect.objectContaining({ Resource: 'arn:aws:kms:us-east-1:111111111111:key/table' }),
-    );
-    expect(environmentOf(template, 'Sender')).toMatchObject({ IDENTITIES_TABLE: 'example-identities' });
+    expect(JSON.stringify(senderPolicyOf(template))).not.toContain('key/table');
+    expect(JSON.stringify(environmentOf(template, 'Sender'))).not.toContain('example-identities');
   });
 
-  const twoPools = (settings: (stack: Stack) => Partial<IdentityPoolProps>, key: (stack: Stack) => kms.IKey | undefined) => {
+  const twoPools = (key: (stack: Stack) => kms.IKey | undefined) => {
     const stack = new Stack(new App(), 'Test', { env });
     const sender = fn(stack, 'Sender');
     const shared = key(stack);
-    const extra = settings(stack);
     for (const id of ['First', 'Second']) {
       new IdentityPool(stack, id, {
         triggers: { handler: fn(stack, `${id}Triggers`), customEmailSender: { handler: sender, key: shared } },
         webClient,
         domainPrefix: `example-${id.toLowerCase()}`,
-        ...extra,
       });
     }
     return stack;
   };
 
-  it('refuses one sender function for two pools that would configure it differently', () => {
-    expect(() => twoPools(() => ({}), () => undefined)).toThrow(/sender function of its own/);
+  it('refuses one sender function for two pools with different email keys', () => {
+    expect(() => twoPools(() => undefined)).toThrow(/sender function of its own/);
   });
 
-  it('lets two pools share a sender when they share the directory table and the key', () => {
-    const stack = twoPools(
-      (s) => ({ directory: { table: dynamodb.Table.fromTableName(s, 'Existing', 'example-identities') } }),
-      (s) => new kms.Key(s, 'SharedKey'),
-    );
-    expect(environmentOf(Template.fromStack(stack), 'Sender')).toMatchObject({ IDENTITIES_TABLE: 'example-identities' });
+  it('lets two pools with directory tables of their own share a sender and a key', () => {
+    const template = Template.fromStack(twoPools((s) => new kms.Key(s, 'SharedKey')));
+    template.resourceCountIs('AWS::DynamoDB::GlobalTable', 2);
+    expect(Object.keys(environmentOf(template, 'Sender')!)).toEqual(['COGNITO_EMAIL_KEY_ARN']);
   });
 
   it('leaves a separate sender in another stack to configure itself', () => {
@@ -221,7 +204,7 @@ describe('triggers', () => {
       webClient,
     });
     expect(environmentOf(Template.fromStack(functions), 'Sender')).toBeUndefined();
-    expect(senderPolicyOf(Template.fromStack(auth)).flatMap(actionsOf)).toContain('cognito-idp:AdminGetUser');
+    expect(senderPolicyOf(Template.fromStack(auth)).flatMap(actionsOf)).toEqual(['kms:Decrypt']);
   });
 
   it('has no cycle when the product reads the table name and key, or grants its own resources', () => {
