@@ -203,12 +203,12 @@ describe("linking hooks", () => {
     expect(seen).not.toContainEqual(["grace", 1]);
   });
 
-  it("uses the provider settings as they are when the link is made", async () => {
+  it("uses the provider settings as they are when a link is prepared, through to confirmation", async () => {
     installFakeCognito();
     localStorage.setItem(SESSION_KEY, await storedSession());
     const token = (await issueTokens({ nonce: "n" })).id_token;
-    const source = () => ({ load: async () => {}, request: vi.fn(async () => token) });
-    const [first, second] = [source(), source()];
+    const source = () => ({ load: vi.fn(async () => {}), request: vi.fn(async () => token) });
+    const [first, second, third] = [source(), source(), source()];
     const adapter = fakeAdapter();
     const client = createCardeaClient(CONFIG);
     let current = first;
@@ -221,9 +221,15 @@ describe("linking hooks", () => {
     });
     current = second;
     rerender();
-    await act(() => result.current.link("Google"));
-    expect(first.request).not.toHaveBeenCalled();
-    expect(second.request).toHaveBeenCalled();
+    await act(() => result.current.prepare("Google"));
+    // A change between preparing and confirming must not swap in a source that was never loaded.
+    current = third;
+    rerender();
+    await act(() => result.current.confirm());
+    expect(first.load).not.toHaveBeenCalled();
+    expect(second.load).toHaveBeenCalledOnce();
+    expect(second.request).toHaveBeenCalledOnce();
+    expect(third.request).not.toHaveBeenCalled();
   });
 
   it("shows a failed link and refuses to confirm before preparing", async () => {

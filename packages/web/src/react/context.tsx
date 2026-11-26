@@ -2,9 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode }
 import type { CardeaClient, StartResult } from "../client.js";
 import { CardeaError } from "../errors.js";
 import type { IdentityLinkAdapter } from "../link/adapter.js";
-import { createLinking, proofSourceFor, type Linking, type LinkingOptions } from "../link/linking.js";
-import type { ProofSource } from "../link/proof.js";
-import type { Provider } from "../providers.js";
+import { createLinking, type Linking, type LinkingOptions } from "../link/linking.js";
 
 interface Cardea {
   client: CardeaClient;
@@ -27,7 +25,7 @@ export interface CardeaProviderProps extends Omit<LinkingOptions, "client" | "ad
 
 export function CardeaProvider(props: CardeaProviderProps) {
   const { client, linkAdapter, onRedirectComplete, children } = props;
-  // The adapter and provider settings are read through a ref at the moment of use,
+  // The adapter and provider settings are read through a ref when needed,
   // so they may change, and inline objects do not restart a link in progress.
   const latest = useRef(props);
   latest.current = props;
@@ -36,10 +34,6 @@ export function CardeaProvider(props: CardeaProviderProps) {
   const linking = useMemo(() => {
     if (!hasAdapter) return null;
     const adapter = () => latest.current.linkAdapter!;
-    const proofSource = (provider: Provider): ProofSource => {
-      const source = () => proofSourceFor(provider, latest.current);
-      return { load: () => source().load(), request: (request) => source().request(request) };
-    };
     return createLinking({
       client,
       adapter: {
@@ -48,7 +42,15 @@ export function CardeaProvider(props: CardeaProviderProps) {
         listSignInMethods: () => adapter().listSignInMethods(),
         unlinkSignInMethod: (input) => adapter().unlinkSignInMethod(input),
       },
-      proofSources: { Google: proofSource("Google"), Apple: proofSource("Apple") },
+      get appleRedirectUri() {
+        return latest.current.appleRedirectUri;
+      },
+      get googleButton() {
+        return latest.current.googleButton;
+      },
+      get proofSources() {
+        return latest.current.proofSources;
+      },
     });
   }, [client, hasAdapter]);
 

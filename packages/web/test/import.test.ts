@@ -333,6 +333,25 @@ describe("an old session never comes back", () => {
     expect(keys()).toEqual([]);
   });
 
+  it.each([
+    ["a getter found a session", true, (client: ReturnType<typeof setup>["client"]) => client.getIdToken()],
+    ["start found a session", true, (client: ReturnType<typeof setup>["client"]) => client.start()],
+    ["a sign-out before start", false, async (client: ReturnType<typeof setup>["client"]) => client.signOut()],
+  ])("is not read later in the page's life, after %s", async (_name, signedIn, first) => {
+    installFakeCognito();
+    if (signedIn) localStorage.setItem(SESSION_KEY, await storedSession());
+    const { client } = setup(sources);
+    await first(client);
+    if (signedIn) otherTabWrites(SESSION_KEY, null);
+    // A tab still running the app's old build signs in afterwards.
+    await saveSdk({ subject: "grace" });
+    const before = keys();
+    await expect(client.getIdToken()).resolves.toBeNull();
+    await client.start();
+    expect(client.getState().status).toBe("signedOut");
+    expect(keys()).toEqual(before);
+  });
+
   it("is removed when another tab signs out", async () => {
     installFakeCognito();
     localStorage.setItem(SESSION_KEY, await storedSession());
@@ -407,7 +426,10 @@ describe("an old session never comes back", () => {
     expect(events).toHaveLength(1);
   });
 
-  it("is left alone while a provider sign-in is being finished", async () => {
+  it.each([
+    ["before start and during it", true],
+    ["only during it", false],
+  ])("is left alone while a provider sign-in is being finished, with tokens asked %s", async (_name, askEarly) => {
     const cognito = installFakeCognito();
     const redirect = vi.fn();
     await createCardeaClient(CONFIG, { redirect }).signInWithProvider("Google");
@@ -416,8 +438,8 @@ describe("an old session never comes back", () => {
     await saveSdk({ subject: "grace" });
     window.history.replaceState(null, "", `/auth/callback?code=c&state=${url.searchParams.get("state")}`);
     const { client, events } = setup(sources);
-    // Before start, then again once start has cleared the address.
-    const early = client.getIdToken();
+    // `during` is asked once start has cleared the address.
+    const early = askEarly ? client.getIdToken() : Promise.resolve(null);
     const started = client.start();
     const during = client.getIdToken();
     await expect(early).resolves.toBeNull();

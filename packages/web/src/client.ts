@@ -110,7 +110,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   let ready = false;
   let failure: CardeaError | null = null;
   let starting: Promise<StartResult> | undefined;
-  // The one import this client may run, started by whoever needs the session first.
+  // Set once the client has decided about importing; it decides only once.
   let takeover: Promise<void> | undefined;
   let takingOver = false;
   const listeners = new Set<() => void>();
@@ -182,9 +182,15 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     return url.pathname === config.callbackPath && answered ? url : null;
   }
 
+  /** Rules out an import for the rest of this page's life. */
+  function settleImport(): void {
+    takeover ??= Promise.resolve();
+  }
+
   function beginImport(): void {
-    // A sign-in being finished wins over an old session.
-    if (takeover || !config.importSession.length || providerReturn() || store.read().record) return;
+    if (takeover) return;
+    // A sign-in being finished wins over an old session, and so does a saved one.
+    if (!config.importSession.length || providerReturn() || store.read().record) return settleImport();
     takingOver = true;
     takeover = takeOverOldSession().finally(() => (takingOver = false));
     // `start` reports the failure.
@@ -241,7 +247,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     if (store.read().record) forgetLegacy();
     if (callback) {
       // Finishing it clears the address, so rule out an import first.
-      takeover = Promise.resolve();
+      settleImport();
       result = await finishCallback(callback);
     } else {
       // A reload of the emptied callback page has nothing to finish.
@@ -306,6 +312,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     signOut({ hosted } = {}) {
       const method = store.read().record?.method;
       signOuts++;
+      settleImport();
       store.supersede();
       ready = true;
       failure = null;

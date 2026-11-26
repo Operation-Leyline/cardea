@@ -12,12 +12,13 @@ import type { ProofSource } from "./proof.js";
 export interface LinkingOptions {
   client: CardeaClient;
   adapter: IdentityLinkAdapter;
+  // The three provider settings are read each time a link is prepared.
   /** Return URL registered on the Apple Services ID. */
-  appleRedirectUri?: string;
+  appleRedirectUri?: string | undefined;
   /** Options for Google's button. */
-  googleButton?: Record<string, unknown>;
+  googleButton?: Record<string, unknown> | undefined;
   /** Replaces how a provider token is obtained, for tests or a native shell. */
-  proofSources?: Partial<Record<Provider, ProofSource>>;
+  proofSources?: Partial<Record<Provider, ProofSource>> | undefined;
 }
 
 export interface ConfirmOptions {
@@ -58,21 +59,13 @@ export interface Linking {
   onMethodsChanged(listener: () => void): () => void;
 }
 
-/** How a provider's token is obtained under these settings. */
-export function proofSourceFor(
-  provider: Provider,
-  { proofSources, googleButton, appleRedirectUri }: Omit<LinkingOptions, "client" | "adapter">,
-): ProofSource {
-  const standard = provider === "Google" ? googleProofSource(googleButton) : appleProofSource(appleRedirectUri);
-  return proofSources?.[provider] ?? standard;
-}
-
 export function createLinking(options: LinkingOptions): Linking {
   const { client, adapter } = options;
-  const sources: Record<Provider, ProofSource> = {
-    Google: proofSourceFor("Google", options),
-    Apple: proofSourceFor("Apple", options),
-  };
+  function sourceFor(provider: Provider): ProofSource {
+    const custom = options.proofSources?.[provider];
+    if (custom) return custom;
+    return provider === "Google" ? googleProofSource(options.googleButton) : appleProofSource(options.appleRedirectUri);
+  }
   const listeners = new Set<() => void>();
   const changed = () => {
     for (const listener of [...listeners]) listener();
@@ -91,7 +84,7 @@ export function createLinking(options: LinkingOptions): Linking {
 
   /** Waits for the provider, giving up at the deadline, on abort, or if the account changes. */
   async function obtainProof(
-    provider: Provider,
+    source: ProofSource,
     challenge: IdentityLinkChallenge,
     deadline: number,
     confirm: ConfirmOptions,
@@ -106,7 +99,7 @@ export function createLinking(options: LinkingOptions): Linking {
     if (confirm.signal?.aborted) cancel();
     try {
       // Called before any `await`, so a click still counts when the provider opens its popup.
-      const idToken = await sources[provider].request({
+      const idToken = await source.request({
         clientId: challenge.clientId,
         nonce: challenge.nonce,
         signal: controller.signal,
@@ -124,9 +117,11 @@ export function createLinking(options: LinkingOptions): Linking {
 
   async function prepareLink(provider: Provider): Promise<PreparedLink> {
     const session = await signedIn();
+    // The source that is loaded here is the one asked at confirmation.
+    const source = sourceFor(provider);
     const [challenge] = await Promise.all([
       adapter.createIdentityLink({ provider, clientToken: crypto.randomUUID() }),
-      sources[provider].load(),
+      source.load(),
     ]);
     sameAccount(session);
     const expiresAt = new Date(challenge.expiresAt);
@@ -137,7 +132,7 @@ export function createLinking(options: LinkingOptions): Linking {
 
     async function complete(confirm: ConfirmOptions) {
       sameAccount(session);
-      if (!proof) proof = await obtainProof(provider, challenge, expiresAt.getTime(), confirm);
+      if (!proof) proof = await obtainProof(source, challenge, expiresAt.getTime(), confirm);
       sameAccount(session);
       const completed = await adapter.completeIdentityLink({ linkId: challenge.linkId, idToken: proof });
       sameAccount(session);
