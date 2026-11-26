@@ -107,6 +107,9 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   let signOuts = 0;
   /** A sign-in may save only if this is unchanged since it began. */
   const mark = () => `${signOuts}:${store.generation()}`;
+  function assertCurrent(started: string, returnTo?: string): void {
+    if (started !== mark()) throw new CardeaError("session-superseded", returnTo);
+  }
   let ready = false;
   let failure: CardeaError | null = null;
   let starting: Promise<StartResult> | undefined;
@@ -131,7 +134,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   });
 
   function accept(record: StoredSession, started: string, returnTo?: string): Session {
-    if (started !== mark()) throw new CardeaError("session-superseded", returnTo);
+    assertCurrent(started, returnTo);
     ready = true;
     failure = null;
     discardAttempt(config, attemptStorage);
@@ -146,8 +149,11 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
       return {
         status: "newPasswordRequired",
         requiredAttributes: step.requiredAttributes,
-        completeNewPassword: async (password, attributes) =>
-          signInResult(await step.next(password, attributes), email, started),
+        completeNewPassword: async (password, attributes) => {
+          // Checked before sending: Cognito replaces the password even if the session is then refused.
+          assertCurrent(started);
+          return signInResult(await step.next(password, attributes), email, started);
+        },
       };
     }
     if (step.kind === "totp") {

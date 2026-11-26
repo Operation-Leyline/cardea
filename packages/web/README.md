@@ -72,7 +72,9 @@ client.signOut();
 
 A challenge result can itself lead to another challenge, so handle the value
 each continuation returns. A sign-in under way is abandoned
-(`session-superseded`) if anyone signs in or out first, in this tab or another. Errors from Cognito arrive unchanged; read their
+(`session-superseded`) if anyone signs in or out first, in this tab or another.
+A new password is then not sent. If the change happens while it is being sent,
+the password may already be replaced. Errors from Cognito arrive unchanged; read their
 name with `authErrorCode`. This package's own failures are `CardeaError`, with
 a fixed message per `code`.
 

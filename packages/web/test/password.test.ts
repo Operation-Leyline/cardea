@@ -145,6 +145,20 @@ describe("a sign-in under way, and other tabs", () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
   });
 
+  it("does not send a new password once another tab has signed in or out", async () => {
+    const { cognito, client } = setup();
+    cognito.operations.RespondToAuthChallenge = async () => ({
+      ChallengeName: "NEW_PASSWORD_REQUIRED",
+      Session: "s",
+      ChallengeParameters: { userAttributes: "{}", requiredAttributes: "[]" },
+    });
+    const challenge = expectStatus(await client.signIn("ada@example.test", "temporary"), "newPasswordRequired");
+    createCardeaClient(CONFIG, { redirect: () => {} }).signOut();
+    const sent = cognito.calls.length;
+    await expect(challenge.completeNewPassword(PASSWORD)).rejects.toMatchObject({ code: "session-superseded" });
+    expect(cognito.calls).toHaveLength(sent);
+  });
+
   it("is abandoned when another tab signs in", async () => {
     const { challenge, other, cognito } = await twoTabs();
     const normal = cognito.operations.RespondToAuthChallenge;
