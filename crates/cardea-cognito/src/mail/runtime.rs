@@ -6,7 +6,6 @@ use lambda_runtime::{LambdaEvent, service_fn};
 use serde_json::Value;
 
 use super::{EmailSender, KmsDecryptor, MailDelivery, MailError};
-use crate::directory::{AwsDirectory, config};
 
 /// The environment variable naming the budget's table.
 const TABLE_VARIABLE: &str = "MAIL_BUDGET_TABLE";
@@ -33,27 +32,13 @@ impl EmailSender {
 
 /// [`run`] on a Tokio runtime the caller already has.
 pub async fn serve(delivery: impl MailDelivery) -> Result<(), lambda_runtime::Error> {
-    let shared = Arc::new((
-        EmailSender::from_env().await?,
-        delivery,
-        config::load().await,
-    ));
+    let shared = Arc::new((EmailSender::from_env().await?, delivery));
     lambda_runtime::run(service_fn(move |event: LambdaEvent<Value>| {
         let shared = Arc::clone(&shared);
         async move {
-            let (sender, delivery, config) = &*shared;
-            // Only attribute verification reads the directory, so a function
-            // that has none configured still sends everything else.
-            let directory = event.payload["userPoolId"]
-                .as_str()
-                .and_then(|pool| AwsDirectory::from_env_with(config, pool.into()).ok());
+            let (sender, delivery) = &*shared;
             sender
-                .send(
-                    directory.as_ref(),
-                    delivery,
-                    &event.payload,
-                    &event.context.request_id,
-                )
+                .send(delivery, &event.payload, &event.context.request_id)
                 .await
                 .map_err(lambda_runtime::Error::from)
         }

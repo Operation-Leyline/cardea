@@ -5,6 +5,7 @@
 pub(crate) mod cognito;
 pub(crate) mod ddb;
 pub(crate) mod loopback;
+pub(crate) mod pending_change;
 pub(crate) mod product;
 
 use aws_sdk_dynamodb::types::AttributeValue;

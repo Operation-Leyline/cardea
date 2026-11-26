@@ -16,14 +16,15 @@
 //! | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
 //! | `TokenGeneration_*` | provision if not yet, then the product's claims |
 //! | `TokenGeneration_ClientCredentials` | nothing: there is no person |
-//! | `CustomMessage_UpdateUserAttribute`, `_VerifyUserAttribute` | refuse any address but the one the account holds; otherwise nothing |
+//! | `CustomMessage_UpdateUserAttribute` | refuse |
+//! | `CustomMessage_VerifyUserAttribute` | refuse unless `email_verified` is false |
 //! | `CustomMessage_*`, any other | nothing |
-//! | `CustomEmailSender_*` | refuse the same changed address; spend the mailbox's budget, decrypt, hand to the product (feature `email-sender`) |
+//! | `CustomEmailSender_*` | refuse the same two; spend the mailbox's budget, decrypt, hand to the product (feature `email-sender`) |
 //!
 //! Changing a person's email is not supported. A pool must require
 //! verification before an email update, and route either the custom message or
-//! the custom email sender trigger here, so that the new address is never
-//! verified.
+//! the custom email sender trigger here, so that no code for a new address is
+//! ever sent.
 //! The handler logs through `tracing`; the product installs the subscriber.
 //!
 //! The function reads `IDENTITIES_TABLE` (partition key `identityKey`) and
@@ -35,7 +36,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::directory::AwsDirectory;
+use crate::{directory::AwsDirectory, email_change};
 
 mod account;
 mod error;
@@ -84,13 +85,12 @@ async fn dispatch(
                 .await?;
             Ok(payload)
         }
-        // The code that would complete an email change is withheld.
-        "CustomMessage_UpdateUserAttribute" | "CustomMessage_VerifyUserAttribute" => {
-            directory.check_verification_event(&payload).await?;
+        // A message stays as Cognito wrote it, unless its code could complete
+        // an email change.
+        source if source.starts_with("CustomMessage_") => {
+            email_change::refuse(source, &payload)?;
             Ok(payload)
         }
-        // Every other message stays as Cognito wrote it.
-        source if source.starts_with("CustomMessage_") => Ok(payload),
         // A machine client's token has no person behind it: no account to
         // provision and no user to add claims for.
         "TokenGeneration_ClientCredentials" => Ok(payload),

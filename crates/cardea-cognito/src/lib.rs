@@ -6,6 +6,7 @@
 
 mod cause;
 pub mod directory;
+mod email_change;
 pub mod mail;
 pub mod record;
 mod transact;

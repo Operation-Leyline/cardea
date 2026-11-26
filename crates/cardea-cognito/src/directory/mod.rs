@@ -15,7 +15,6 @@ mod guard;
 mod holder;
 mod pool;
 mod social;
-mod verification;
 
 pub use holder::{HolderReadError, mailbox_holder};
 

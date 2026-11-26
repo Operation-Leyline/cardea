@@ -1,5 +1,5 @@
-//! Cognito's mail, for a pool with a custom email sender: a code that would
-//! change an account's address is refused; every other message a stranger can
+//! Cognito's mail, for a pool with a custom email sender: a code that could
+//! complete an email change is refused; every other message a stranger can
 //! request is counted against one of its mailbox's daily budgets
 //! ([`Counter`]), its code decrypted, and handed to the product to deliver.
 //!
@@ -8,11 +8,7 @@
 //! Both need the `email-sender` feature, `MAIL_BUDGET_TABLE` (a table keyed by
 //! `partitionKey` and `sortKey`, TTL `expiresAt`) with `PutItem` and
 //! `UpdateItem` on it, and `COGNITO_EMAIL_KEY_ARN` with `kms:Decrypt` on that
-//! key. Attribute verification codes also read the directory:
-//! `IDENTITIES_TABLE` with `GetItem`, and `cognito-idp:AdminGetUser` on the
-//! pool. A function without them refuses those codes and sends the rest, so
-//! signup and reset mail arriving does not show that they are in place: check a
-//! deployment with an attribute verification code too.
+//! key.
 
 pub mod budget;
 mod message;

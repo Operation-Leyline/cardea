@@ -7,10 +7,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{Code, MailDelivery, MailMessage, MessageKind, Refusal, Template, budget};
-use crate::{
-    directory::{AwsDirectory, now},
-    triggers::ProductError,
-};
+use crate::{directory::now, email_change, triggers::ProductError};
 
 /// The longest encrypted code accepted, in base64.
 const MAX_CODE_BYTES: usize = 32_768;
@@ -35,7 +32,7 @@ pub enum MailError {
     /// The event lacks a field.
     #[error("missing {0}")]
     MissingField(&'static str),
-    /// An identity rule refused the message, or could not be checked.
+    /// An identity rule refused the message.
     #[error(transparent)]
     Identity(#[from] cardea_core::Error),
     /// The budget refused the message.
@@ -118,15 +115,12 @@ impl EmailSender {
     /// Send the message a `CustomEmailSender_*` event asks for. The answer is
     /// empty: the encrypted event is never echoed.
     ///
-    /// `directory` is that of the event's pool, or `None` where the function
-    /// has none configured. Only attribute verification codes read it: one that
-    /// would verify any address but the one the account holds is refused
-    /// ([`AwsDirectory::check_verification`]) with nothing spent or sent, and
-    /// so is every one when there is no directory to check it against. Other
-    /// messages are sent either way.
+    /// A code that could complete an email change is refused with
+    /// [`Error::EmailChange`](cardea_core::Error::EmailChange), with nothing
+    /// spent or sent: every `_UpdateUserAttribute`, and a
+    /// `_VerifyUserAttribute` unless the event's `email_verified` is false.
     pub async fn send(
         &self,
-        directory: Option<&AwsDirectory>,
         delivery: &dyn MailDelivery,
         event: &Value,
         request_id: &str,
@@ -134,16 +128,10 @@ impl EmailSender {
         if required(&event["request"], "type")? != "customEmailSenderRequestV1" {
             return Err(MailError::UnsupportedVersion);
         }
-        let kind = MessageKind::from_trigger(required(event, "triggerSource")?)
-            .ok_or(MailError::UnsupportedSource)?;
+        let source = required(event, "triggerSource")?;
+        let kind = MessageKind::from_trigger(source).ok_or(MailError::UnsupportedSource)?;
+        email_change::refuse(source, event)?;
         let recipient = required(&event["request"]["userAttributes"], "email")?;
-        if kind == MessageKind::VerifyAttribute {
-            let Some(directory) = directory else {
-                tracing::error!("no identity directory is configured to check an address");
-                return Err(cardea_core::Error::Unavailable.into());
-            };
-            directory.check_verification_event(event).await?;
-        }
         let template = delivery.template(kind).map_err(MailError::Template)?;
         let key = delivery_key(event, &template, request_id);
         // Spent before decrypting or sending anything, so a refused request

@@ -2,8 +2,12 @@ use aws_sdk_dynamodb::types::AttributeValue as Av;
 
 use super::*;
 use crate::mail::{Counter, DAILY_CAP, RESET_DAILY_CAP};
-use crate::testing::{Fixture, ddb, fixture, product::Outbox};
-use cardea_core::{Directory, EmailOwner, Error};
+use crate::testing::{
+    ddb,
+    pending_change::{self, NEW, OBSERVED, OLD},
+    product::Outbox,
+};
+use cardea_core::Error;
 
 /// "Decrypts" by reading the bytes as text, and remembers the pool.
 struct Plain;
@@ -16,49 +20,20 @@ impl CodeDecryptor for Plain {
     }
 }
 
-/// A sender, and a directory in which `victim@example.com` is the account
-/// the events are about.
-struct Sender {
-    sender: EmailSender,
-    directory: Fixture,
-    ddb: Dynamo,
-    table: String,
-}
-
-impl Sender {
-    async fn send(&self, outbox: &Outbox, event: &Value) -> Result<Value, MailError> {
-        self.sender
-            .send(Some(&self.directory.directory), outbox, event, "r")
-            .await
-    }
-}
-
-async fn sender() -> Sender {
+async fn sender() -> (EmailSender, Dynamo, String) {
     let client = ddb::client();
     let table = ddb::table(&client, "partitionKey", Some("sortKey")).await;
-    let directory = fixture().await;
-    directory
-        .directory
-        .claim_email(&EmailOwner {
-            email: "victim@example.com".into(),
-            username: "victim".into(),
-            origin: "Cognito".into(),
-        })
-        .await
-        .unwrap();
-    Sender {
-        sender: EmailSender::new(client.clone(), table.clone(), Plain),
-        directory,
-        ddb: client,
+    (
+        EmailSender::new(client.clone(), table.clone(), Plain),
+        client,
         table,
-    }
+    )
 }
 
 fn event(source: &str, code: &str) -> Value {
-    json!({"userPoolId":"pool","userName":"victim",
-        "triggerSource":format!("CustomEmailSender_{source}"),
+    json!({"userPoolId":"pool","triggerSource":format!("CustomEmailSender_{source}"),
         "request":{"type":"customEmailSenderRequestV1","code":STANDARD.encode(code),
-            "userAttributes":{"sub":"victim-sub","email":"victim@example.com"}}})
+            "userAttributes":{"email":"victim@example.com"}}})
 }
 
 async fn rows(ddb: &Dynamo, table: &str) -> Vec<std::collections::HashMap<String, Av>> {
@@ -161,11 +136,11 @@ fn the_delivery_key_keeps_its_spelling() {
 
 #[tokio::test]
 async fn a_message_is_counted_decrypted_and_delivered() {
-    let fixture = sender().await;
+    let (sender, ddb, table) = sender().await;
     let outbox = Outbox::default();
     assert_eq!(
-        fixture
-            .send(&outbox, &event("SignUp", "012345"))
+        sender
+            .send(&outbox, &event("SignUp", "012345"), "r")
             .await
             .unwrap(),
         json!({})
@@ -177,12 +152,12 @@ async fn a_message_is_counted_decrypted_and_delivered() {
     assert_eq!(code.as_deref(), Some("012345"));
     assert!(key.starts_with("cognito:"));
     // The delivery marker and the counter.
-    assert_eq!(rows(&fixture.ddb, &fixture.table).await.len(), 2);
+    assert_eq!(rows(&ddb, &table).await.len(), 2);
 }
 
 #[tokio::test]
 async fn the_cap_refuses_before_delivery() {
-    let fixture = sender().await;
+    let (sender, ..) = sender().await;
     let outbox = Outbox::default();
     for (source, cap) in [
         ("ForgotPassword", RESET_DAILY_CAP),
@@ -190,13 +165,13 @@ async fn the_cap_refuses_before_delivery() {
         ("Authentication", DAILY_CAP),
     ] {
         for n in 0..cap {
-            fixture
-                .send(&outbox, &event(source, &n.to_string()))
+            sender
+                .send(&outbox, &event(source, &n.to_string()), "r")
                 .await
                 .unwrap();
         }
         assert!(matches!(
-            fixture.send(&outbox, &event(source, "over")).await,
+            sender.send(&outbox, &event(source, "over"), "r").await,
             Err(MailError::Refused(Refusal::CapReached))
         ));
     }
@@ -208,110 +183,118 @@ async fn the_cap_refuses_before_delivery() {
 
 #[tokio::test]
 async fn temporary_passwords_and_alerts_are_uncounted() {
-    let fixture = sender().await;
+    let (sender, ddb, table) = sender().await;
     let outbox = Outbox::default();
-    fixture
-        .send(&outbox, &event("AdminCreateUser", "a&amp;b"))
+    sender
+        .send(&outbox, &event("AdminCreateUser", "a&amp;b"), "r")
         .await
         .unwrap();
     let mut alert = event("AccountTakeOverNotification", "");
     alert["request"].as_object_mut().unwrap().remove("code");
-    fixture.send(&outbox, &alert).await.unwrap();
+    sender.send(&outbox, &alert, "r").await.unwrap();
     let sent = outbox.sent.lock().unwrap().clone();
     assert_eq!(sent[0].2.as_deref(), Some("a&b"));
     assert_eq!(sent[1].2, None);
-    assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
+    assert!(rows(&ddb, &table).await.is_empty());
 }
 
-const CHANGING: [&str; 2] = ["UpdateUserAttribute", "VerifyUserAttribute"];
+const UPDATE: &str = "CustomEmailSender_UpdateUserAttribute";
+const VERIFY: &str = "CustomEmailSender_VerifyUserAttribute";
 
-#[tokio::test]
-async fn a_code_for_the_accounts_own_address_is_sent() {
-    let fixture = sender().await;
+/// Each event is refused as an email change, with nothing sent or counted.
+async fn assert_refused(events: impl IntoIterator<Item = Value>) {
+    let (sender, ddb, table) = sender().await;
     let outbox = Outbox::default();
-    for source in CHANGING {
-        for email in ["victim@example.com", "Victim@Example.com"] {
-            let mut event = event(source, &format!("{source}{email}"));
-            event["request"]["userAttributes"]["email"] = json!(email);
-            fixture.send(&outbox, &event).await.unwrap();
-        }
-    }
-    assert_eq!(outbox.sent.lock().unwrap().len(), 4);
-}
-
-#[tokio::test]
-async fn a_code_for_any_other_address_is_neither_sent_nor_counted() {
-    let fixture = sender().await;
-    let outbox = Outbox::default();
-    for source in CHANGING {
-        let mut changed = event(source, "1");
-        changed["request"]["userAttributes"]["email"] = json!("new@example.com");
-        // Another spelling of the account's mailbox.
-        let mut alias = event(source, "2");
-        alias["request"]["userAttributes"]["email"] = json!("victim+new@example.com");
-        // The account's address, asked for by someone else.
-        let mut intruder = event(source, "3");
-        intruder["userName"] = json!("intruder");
-        for event in [changed, alias, intruder] {
-            assert!(matches!(
-                fixture.send(&outbox, &event).await,
-                Err(MailError::Identity(Error::EmailChange))
-            ));
-        }
+    for event in events {
+        let result = sender.send(&outbox, &event, "r").await;
+        assert!(
+            matches!(result, Err(MailError::Identity(Error::EmailChange))),
+            "{event}: {result:?}"
+        );
     }
     assert!(outbox.sent.lock().unwrap().is_empty());
-    assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
+    assert!(rows(&ddb, &table).await.is_empty());
 }
 
-/// Without a directory, attribute verification codes are refused with nothing
-/// spent, and every other message is still sent.
+/// One goes to the new address and one to the old; neither is sent.
 #[tokio::test]
-async fn without_a_directory_only_attribute_codes_are_refused() {
-    let fixture = sender().await;
+async fn the_codes_a_pending_change_sends_are_refused() {
+    assert_refused(
+        OBSERVED
+            .into_iter()
+            .filter(|(source, _)| source.starts_with("CustomEmailSender_"))
+            .map(|(source, email)| {
+                pending_change::event(source, email, Some(json!("true")), "012345")
+            }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_attribute_update_is_refused_whatever_it_says() {
+    let mut events = Vec::new();
+    for email in [OLD, NEW] {
+        for verified in [Some(json!("true")), Some(json!("false")), None] {
+            events.push(pending_change::event(UPDATE, email, verified, "1"));
+        }
+    }
+    assert_refused(events).await;
+}
+
+#[tokio::test]
+async fn verification_is_refused_unless_the_address_is_clearly_unverified() {
+    assert_refused(
+        [
+            Some(json!("true")),
+            Some(json!(true)),
+            Some(json!("False")),
+            Some(json!("")),
+            Some(json!(0)),
+            Some(Value::Null),
+            None,
+        ]
+        .map(|verified| pending_change::event(VERIFY, OLD, verified, "1")),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn verifying_an_unverified_current_address_is_sent_and_counted() {
+    let (sender, ddb, table) = sender().await;
     let outbox = Outbox::default();
-    for source in CHANGING {
-        let refused = fixture
-            .sender
-            .send(None, &outbox, &event(source, "1"), "r")
-            .await;
-        assert!(matches!(
-            refused,
-            Err(MailError::Identity(Error::Unavailable))
-        ));
+    for (code, verified) in [("111", json!("false")), ("222", json!(false))] {
+        let event = pending_change::event(VERIFY, OLD, Some(verified), code);
+        sender.send(&outbox, &event, "r").await.unwrap();
     }
-    assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
-    for source in ["SignUp", "ForgotPassword", "Authentication"] {
-        fixture
-            .sender
-            .send(None, &outbox, &event(source, source), "r")
-            .await
-            .unwrap();
-    }
-    assert_eq!(outbox.sent.lock().unwrap().len(), 3);
+    let sent = outbox.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    assert!(sent.iter().all(|(_, recipient, ..)| recipient == OLD));
+    // Two delivery markers and the day's counter.
+    assert_eq!(rows(&ddb, &table).await.len(), 3);
 }
 
 #[tokio::test]
 async fn a_missing_template_or_a_bad_event_spends_nothing() {
-    let fixture = sender().await;
+    let (sender, ddb, table) = sender().await;
     let outbox = Outbox {
         no_templates: true,
         ..Outbox::default()
     };
     assert!(matches!(
-        fixture.send(&outbox, &event("SignUp", "1")).await,
+        sender.send(&outbox, &event("SignUp", "1"), "r").await,
         Err(MailError::Template(_))
     ));
     let mut version = event("SignUp", "1");
     version["request"]["type"] = json!("customEmailSenderRequestV2");
     assert!(matches!(
-        fixture.send(&outbox, &version).await,
+        sender.send(&outbox, &version, "r").await,
         Err(MailError::UnsupportedVersion)
     ));
     assert!(matches!(
-        fixture.send(&outbox, &event("Unknown", "1")).await,
+        sender.send(&outbox, &event("Unknown", "1"), "r").await,
         Err(MailError::UnsupportedSource)
     ));
-    assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
+    assert!(rows(&ddb, &table).await.is_empty());
 }
 
 #[test]

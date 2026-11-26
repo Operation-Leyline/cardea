@@ -142,8 +142,26 @@ fn main() { cardea_cognito::triggers::run(MyProduct::from_env()) }
 | `PostConfirmation_ConfirmSignUp` | provision through the product hook |
 | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
 | `PreTokenGeneration` | provision if not yet (operator-created accounts), then the product's claims; a machine client's `TokenGeneration_ClientCredentials` passes through untouched |
-| `CustomMessage_*` | refuse `_UpdateUserAttribute` and `_VerifyUserAttribute` for any address but the one on the account's directory row, compared trimmed and lowercased (aliases too: the directory and pool lookups use the signup spelling); otherwise return the event untouched |
-| `CustomEmailSender_*` | refuse the same changed address; spend the mailbox's daily budget (8, or 3 for password resets), decrypt, hand to `mail()` |
+| `CustomMessage_*` | refuse every `_UpdateUserAttribute`, and `_VerifyUserAttribute` unless `email_verified` is false (below); otherwise return the event untouched |
+| `CustomEmailSender_*` | refuse the same two; spend the mailbox's daily budget (8, or 3 for password resets), decrypt, hand to `mail()` |
+
+**Email changes are refused** (decided 2026-11-26). The pool requires
+verification before a new address replaces the old one, so a change completes
+only with a code, and the library never sends it. The trigger source decides,
+not the address. On a live pool with a change pending,
+`request.userAttributes.email` held the old address in
+`CustomMessage_UpdateUserAttribute`, `CustomMessage_VerifyUserAttribute` and
+`CustomEmailSender_VerifyUserAttribute`, and the new one only in
+`CustomEmailSender_UpdateUserAttribute`.
+
+- `_UpdateUserAttribute` is always refused: with verification before update, it
+  only carries a change.
+- `_VerifyUserAttribute` is allowed only when the event's `email_verified` is
+  false, which is verifying the current address. A verified current address
+  leaves only a pending change for the code. A missing or unreadable value is
+  refused too.
+
+A pool that also verified phone numbers would have those codes refused.
 
 ## Sign-in methods and linking
 
