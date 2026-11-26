@@ -37,20 +37,23 @@ impl<P: Product> TriggerHandler<P> {
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or(TriggerError::MissingField("user pool"))?;
-        let directory = AwsDirectory::from_env_with(&self.config, pool.into())?;
+        let directory = AwsDirectory::from_env_with(&self.config, pool.into());
         if payload["triggerSource"]
             .as_str()
             .is_some_and(|source| source.starts_with("CustomEmailSender_"))
         {
-            return self.send_mail(&directory, &payload, request_id).await;
+            // Only attribute verification needs it ([`crate::mail`]).
+            return self
+                .send_mail(directory.ok().as_ref(), &payload, request_id)
+                .await;
         }
-        Ok(handle(&directory, &self.product, payload).await?)
+        Ok(handle(&directory?, &self.product, payload).await?)
     }
 
     #[cfg(feature = "email-sender")]
     async fn send_mail(
         &self,
-        directory: &AwsDirectory,
+        directory: Option<&AwsDirectory>,
         payload: &Value,
         request_id: &str,
     ) -> Result<Value, Failure> {
@@ -69,7 +72,7 @@ impl<P: Product> TriggerHandler<P> {
     #[cfg(not(feature = "email-sender"))]
     async fn send_mail(
         &self,
-        _directory: &AwsDirectory,
+        _directory: Option<&AwsDirectory>,
         _payload: &Value,
         _request_id: &str,
     ) -> Result<Value, Failure> {

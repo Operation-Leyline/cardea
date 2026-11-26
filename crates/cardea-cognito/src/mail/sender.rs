@@ -118,12 +118,15 @@ impl EmailSender {
     /// Send the message a `CustomEmailSender_*` event asks for. The answer is
     /// empty: the encrypted event is never echoed.
     ///
-    /// `directory` is that of the event's pool. A code that would verify any
-    /// address but the one the account holds is refused
-    /// ([`AwsDirectory::check_verification`]) with nothing spent or sent.
+    /// `directory` is that of the event's pool, or `None` where the function
+    /// has none configured. Only attribute verification codes read it: one that
+    /// would verify any address but the one the account holds is refused
+    /// ([`AwsDirectory::check_verification`]) with nothing spent or sent, and
+    /// so is every one when there is no directory to check it against. Other
+    /// messages are sent either way.
     pub async fn send(
         &self,
-        directory: &AwsDirectory,
+        directory: Option<&AwsDirectory>,
         delivery: &dyn MailDelivery,
         event: &Value,
         request_id: &str,
@@ -135,6 +138,10 @@ impl EmailSender {
             .ok_or(MailError::UnsupportedSource)?;
         let recipient = required(&event["request"]["userAttributes"], "email")?;
         if kind == MessageKind::VerifyAttribute {
+            let Some(directory) = directory else {
+                tracing::error!("no identity directory is configured to check an address");
+                return Err(cardea_core::Error::Unavailable.into());
+            };
             directory.check_verification_event(event).await?;
         }
         let template = delivery.template(kind).map_err(MailError::Template)?;

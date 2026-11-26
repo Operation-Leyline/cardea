@@ -8,8 +8,9 @@
 //! Both need the `email-sender` feature, `MAIL_BUDGET_TABLE` (a table keyed by
 //! `partitionKey` and `sortKey`, TTL `expiresAt`) with `PutItem` and
 //! `UpdateItem` on it, and `COGNITO_EMAIL_KEY_ARN` with `kms:Decrypt` on that
-//! key. Both also read the directory: `IDENTITIES_TABLE` with `GetItem`, and
-//! `cognito-idp:AdminGetUser` on the pool.
+//! key. Attribute verification codes also read the directory:
+//! `IDENTITIES_TABLE` with `GetItem`, and `cognito-idp:AdminGetUser` on the
+//! pool. A function without them refuses those codes and sends the rest.
 
 pub mod budget;
 mod message;

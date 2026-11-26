@@ -61,7 +61,8 @@ One rule is new (decided 2026-11-26): the person key also reads `me.com` and
 `@mac.com` address the matching `@icloud.com` one, and all three reach one
 mailbox (Apple Support, "About iCloud Mail addresses"). It changes the key of
 any existing row on those two domains, so Leyline adoption counts and re-keys
-them.
+them. Rows that belong to different accounts can fold into one key, and only
+one can hold it: adoption finds those and settles each before re-keying.
 
 ## Providers
 
@@ -84,9 +85,11 @@ signing in to it first.
 
 `cardea-core` exposes `Provider` (an enum: `Google`, `Apple`; adding one
 is a variant plus its row) and `ProviderIdentity { provider, subject,
-email, authoritative }`, built from verified claims by the provider's rule.
-`resolve_google` becomes `resolve(directory, identity, authenticated_user)`
-with the same steps and the same refusals.
+email, authoritative, private_relay }`, built from verified claims by the
+provider's rule. `resolve_google` becomes `resolve(directory, identity,
+session)` with the same steps and refusals, plus the relay rule below. A
+session is the signed-in caller of a link request: the user, the token's
+`auth_time` and the current time.
 
 ## The directory table
 

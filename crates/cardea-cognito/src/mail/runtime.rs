@@ -31,28 +31,6 @@ impl EmailSender {
     }
 }
 
-/// Send one event's message, against the directory of the pool it names.
-async fn answer(
-    sender: &EmailSender,
-    delivery: &dyn MailDelivery,
-    config: &aws_config::SdkConfig,
-    event: LambdaEvent<Value>,
-) -> Result<Value, lambda_runtime::Error> {
-    let pool = event.payload["userPoolId"]
-        .as_str()
-        .filter(|pool| !pool.is_empty())
-        .ok_or(MailError::MissingField("userPoolId"))?;
-    let directory = AwsDirectory::from_env_with(config, pool.into())?;
-    Ok(sender
-        .send(
-            &directory,
-            delivery,
-            &event.payload,
-            &event.context.request_id,
-        )
-        .await?)
-}
-
 /// [`run`] on a Tokio runtime the caller already has.
 pub async fn serve(delivery: impl MailDelivery) -> Result<(), lambda_runtime::Error> {
     let shared = Arc::new((
@@ -64,7 +42,20 @@ pub async fn serve(delivery: impl MailDelivery) -> Result<(), lambda_runtime::Er
         let shared = Arc::clone(&shared);
         async move {
             let (sender, delivery, config) = &*shared;
-            answer(sender, delivery, config, event).await
+            // Only attribute verification reads the directory, so a function
+            // that has none configured still sends everything else.
+            let directory = event.payload["userPoolId"]
+                .as_str()
+                .and_then(|pool| AwsDirectory::from_env_with(config, pool.into()).ok());
+            sender
+                .send(
+                    directory.as_ref(),
+                    delivery,
+                    &event.payload,
+                    &event.context.request_id,
+                )
+                .await
+                .map_err(lambda_runtime::Error::from)
         }
     }))
     .await

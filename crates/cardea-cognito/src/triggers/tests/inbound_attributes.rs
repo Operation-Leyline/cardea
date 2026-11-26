@@ -11,7 +11,9 @@ async fn profile(fixture: &Fixture, mut event: Value, user_info: Value) -> Value
     answer["response"]["userAttributesToMap"].clone()
 }
 
-/// Apple names the person only on the first authorization.
+/// Apple names the person only on the first authorization. The flat fields
+/// here are an assumed shape: where a real pool puts Apple's name has not been
+/// observed.
 #[tokio::test]
 async fn apples_first_sign_in_keeps_the_name() {
     let fixture = fixture().await;

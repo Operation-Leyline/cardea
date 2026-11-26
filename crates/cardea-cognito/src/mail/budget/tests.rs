@@ -1,5 +1,13 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+use axum::{Json, Router, http::StatusCode, routing::post};
+use serde_json::json;
+
 use super::*;
-use crate::testing::ddb;
+use crate::testing::{ddb, loopback};
 
 const NOON: i64 = 1_790_000_000;
 
@@ -146,6 +154,61 @@ async fn concurrent_requests_cannot_overshoot_the_cap() {
         }
     }
     assert_eq!(allowed, DAILY_CAP);
+}
+
+/// A DynamoDB that cancels its first `conflicts` transactions because another
+/// one held the counter, then accepts. The in-process emulator runs
+/// transactions one at a time, so it never answers this way.
+async fn contended(conflicts: usize) -> (Client, loopback::Loopback, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    let server = loopback::serve(Router::new().route(
+        "/",
+        post(move || async move {
+            if seen.fetch_add(1, Ordering::SeqCst) >= conflicts {
+                return (StatusCode::OK, Json(json!({})));
+            }
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "__type": "com.amazonaws.dynamodb.v20120810#TransactionCanceledException",
+                    "message": "cancelled",
+                    "CancellationReasons": [{"Code": "None"}, {"Code": "TransactionConflict"}],
+                })),
+            )
+        }),
+    ))
+    .await;
+    let config = ddb::client()
+        .config()
+        .to_builder()
+        .endpoint_url(server.endpoint())
+        .retry_config(aws_sdk_dynamodb::config::retry::RetryConfig::disabled())
+        .build();
+    (Client::from_conf(config), server, calls)
+}
+
+/// Used to be: two sends for one mailbox at once, such as a signup code and a
+/// quick resend, refused the loser as if the table were unavailable.
+#[tokio::test]
+async fn a_send_that_lost_a_race_for_the_counter_goes_again() {
+    let (ddb, _server, calls) = contended(2).await;
+    assert_eq!(
+        send(&ddb, "budget", "victim@example.com", "m", NOON).await,
+        Ok(())
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+/// Contention that does not clear is refused rather than sent unmetered.
+#[tokio::test]
+async fn a_counter_that_stays_contended_refuses() {
+    let (ddb, _server, calls) = contended(usize::MAX).await;
+    assert_eq!(
+        send(&ddb, "budget", "victim@example.com", "m", NOON).await,
+        Err(Refusal::Unavailable)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
 }
 
 #[test]

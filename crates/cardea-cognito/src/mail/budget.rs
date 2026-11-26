@@ -18,7 +18,7 @@ use aws_sdk_dynamodb::{
 use cardea_core::person_key;
 use sha2::{Digest, Sha256};
 
-use crate::cause::cause;
+use crate::{TransactError, cause::cause, transact};
 
 /// Messages of [`Counter::General`] one mailbox may be sent in a UTC day. A
 /// person legitimately needs a handful (the signup code, a resend or two, a
@@ -94,7 +94,8 @@ fn key(recipient: &str, counter: Counter, now: i64) -> Result<(String, String), 
 /// message at a time. A marker row and the counter are one transaction: the
 /// marker's condition says "already counted", the counter's says "cap
 /// reached", and the count and the cap check are one conditional write, so
-/// concurrent requests cannot overshoot the cap.
+/// concurrent requests cannot overshoot the cap. A request that only lost the
+/// race for a row to another one goes again ([`transact`]).
 pub async fn spend(
     ddb: &Client,
     table: &str,
@@ -133,15 +134,13 @@ pub async fn spend(
         .expression_attribute_values(":expires", expires)
         .build()
         .map_err(|_| Refusal::Unavailable)?;
-    let result = ddb
-        .transact_write_items()
-        .transact_items(TransactWriteItem::builder().put(marker).build())
-        .transact_items(TransactWriteItem::builder().update(count).build())
-        .send()
-        .await;
-    match result {
-        Ok(_) => Ok(()),
-        Err(error) => match failed_conditions(error.as_service_error()).as_slice() {
+    let items = vec![
+        TransactWriteItem::builder().put(marker).build(),
+        TransactWriteItem::builder().update(count).build(),
+    ];
+    match transact(ddb, items).await {
+        Ok(()) => Ok(()),
+        Err(TransactError(error)) => match failed_conditions(error.as_service_error()).as_slice() {
             // The marker exists: this message was counted when it first came.
             failed if failed.contains(&0) => Ok(()),
             [] => {

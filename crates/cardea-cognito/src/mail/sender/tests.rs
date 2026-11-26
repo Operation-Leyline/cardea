@@ -28,7 +28,7 @@ struct Sender {
 impl Sender {
     async fn send(&self, outbox: &Outbox, event: &Value) -> Result<Value, MailError> {
         self.sender
-            .send(&self.directory.directory, outbox, event, "r")
+            .send(Some(&self.directory.directory), outbox, event, "r")
             .await
     }
 }
@@ -261,6 +261,32 @@ async fn a_code_for_any_other_address_is_neither_sent_nor_counted() {
     }
     assert!(outbox.sent.lock().unwrap().is_empty());
     assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
+}
+
+/// Used to be: a sender function without a directory sent no mail at all.
+#[tokio::test]
+async fn without_a_directory_only_attribute_codes_are_refused() {
+    let fixture = sender().await;
+    let outbox = Outbox::default();
+    for source in CHANGING {
+        let refused = fixture
+            .sender
+            .send(None, &outbox, &event(source, "1"), "r")
+            .await;
+        assert!(matches!(
+            refused,
+            Err(MailError::Identity(Error::Unavailable))
+        ));
+    }
+    assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
+    for source in ["SignUp", "ForgotPassword", "Authentication"] {
+        fixture
+            .sender
+            .send(None, &outbox, &event(source, source), "r")
+            .await
+            .unwrap();
+    }
+    assert_eq!(outbox.sent.lock().unwrap().len(), 3);
 }
 
 #[tokio::test]
