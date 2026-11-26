@@ -146,6 +146,16 @@ API model (Crucible), so the names and errors are the product's:
 | `CompleteIdentityLink(linkId, idToken)` | verifies the provider token (signature, issuer, audience, expiry, freshness, nonce), binds and links; replays for 24 h |
 | `UnlinkSignInMethod(provider)` | `AdminDisableProviderForUser` and remove the binding; refused when it would leave no method |
 
+Shapes (field names fixed by the web package's adapter, lane C; a product
+may name its API fields differently and map them in its adapter):
+
+| Operation | Input | Output |
+|---|---|---|
+| `CreateIdentityLink` | `provider` (`Google` \| `Apple`), `clientToken` | `linkId`, `nonce`, `clientId` (the provider's client id or Apple Services ID), `expiresAt` |
+| `CompleteIdentityLink` | `linkId`, `idToken` | `userId` |
+| `ListSignInMethods` | — | list of `{ type: "password" }` or `{ type: "provider", provider, email \| null }` |
+| `UnlinkSignInMethod` | `provider` | — |
+
 Unlinking never deletes the account or moves data, and an unlinked
 provider identity may then be linked to a different account. Leyline keeps
 `CreateGoogleIdentityLink` / `CompleteGoogleIdentityLink` as they are until
