@@ -31,25 +31,29 @@ impl<P: Product> TriggerHandler<P> {
     /// Answer one event. `request_id` is the Lambda invocation's.
     ///
     /// The directory table comes from `IDENTITIES_TABLE` and the pool from the
-    /// event. A custom email sender event needs neither: it goes to
-    /// [`Product::mail`].
+    /// event. A custom email sender event goes to [`Product::mail`].
     pub async fn invoke(&self, payload: Value, request_id: &str) -> Result<Value, Failure> {
-        if payload["triggerSource"]
-            .as_str()
-            .is_some_and(|source| source.starts_with("CustomEmailSender_"))
-        {
-            return self.send_mail(&payload, request_id).await;
-        }
         let pool = payload["userPoolId"]
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or(TriggerError::MissingField("user pool"))?;
         let directory = AwsDirectory::from_env_with(&self.config, pool.into())?;
+        if payload["triggerSource"]
+            .as_str()
+            .is_some_and(|source| source.starts_with("CustomEmailSender_"))
+        {
+            return self.send_mail(&directory, &payload, request_id).await;
+        }
         Ok(handle(&directory, &self.product, payload).await?)
     }
 
     #[cfg(feature = "email-sender")]
-    async fn send_mail(&self, payload: &Value, request_id: &str) -> Result<Value, Failure> {
+    async fn send_mail(
+        &self,
+        directory: &AwsDirectory,
+        payload: &Value,
+        request_id: &str,
+    ) -> Result<Value, Failure> {
         let delivery = self
             .product
             .mail()
@@ -57,11 +61,18 @@ impl<P: Product> TriggerHandler<P> {
         // Reading the environment here keeps it unneeded in a function that
         // never receives mail events.
         let sender = crate::mail::EmailSender::from_env().await?;
-        Ok(sender.send(delivery, payload, request_id).await?)
+        Ok(sender
+            .send(directory, delivery, payload, request_id)
+            .await?)
     }
 
     #[cfg(not(feature = "email-sender"))]
-    async fn send_mail(&self, _payload: &Value, _request_id: &str) -> Result<Value, Failure> {
+    async fn send_mail(
+        &self,
+        _directory: &AwsDirectory,
+        _payload: &Value,
+        _request_id: &str,
+    ) -> Result<Value, Failure> {
         Err("built without the email-sender feature".into())
     }
 }

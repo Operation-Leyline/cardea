@@ -24,8 +24,9 @@ pub fn normalize_email(email: &str) -> Result<String, Error> {
 /// per-person quota should be too, so it holds across every sign-in method.
 ///
 /// The rule is lowercase, drop a `+tag` from the local part on every domain,
-/// and drop the local part's dots on Gmail (`googlemail.com` is Gmail).
-/// Without it `a.b+1@gmail.com`, `a.b+2@gmail.com` and `ab@gmail.com` are
+/// drop the local part's dots on Gmail (`googlemail.com` is Gmail), and read
+/// `me.com` and `mac.com` as `icloud.com`: Apple delivers all three to one
+/// mailbox. Without it `a.b+1@gmail.com`, `a.b+2@gmail.com` and `ab@gmail.com` are
 /// three people, and a per-person allowance can be farmed with aliases. A
 /// provider that treats a tag as a distinct mailbox only loses the chance to
 /// sign up twice with one root address. The delivery address is untouched
@@ -33,10 +34,10 @@ pub fn normalize_email(email: &str) -> Result<String, Error> {
 pub fn person_key(email: &str) -> Result<String, Error> {
     let email = normalize_email(email)?;
     let (local, domain) = email.rsplit_once('@').ok_or(Error::Invalid)?;
-    let domain = if domain == "googlemail.com" {
-        "gmail.com"
-    } else {
-        domain
+    let domain = match domain {
+        "googlemail.com" => "gmail.com",
+        "me.com" | "mac.com" => "icloud.com",
+        other => other,
     };
     // An address that is all tag (`+x@host`) keeps its tag: there is no
     // mailbox name left to fold to.

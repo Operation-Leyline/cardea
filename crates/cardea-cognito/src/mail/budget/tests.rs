@@ -17,12 +17,23 @@ async fn send(
     delivery: &str,
     now: i64,
 ) -> Result<(), Refusal> {
-    spend(ddb, table, recipient, delivery, now, DAILY_CAP).await
+    spend(ddb, table, recipient, delivery, Counter::General, now).await
+}
+
+/// One new password reset message.
+async fn reset(
+    ddb: &Client,
+    table: &str,
+    recipient: &str,
+    delivery: &str,
+    now: i64,
+) -> Result<(), Refusal> {
+    spend(ddb, table, recipient, delivery, Counter::PasswordReset, now).await
 }
 
 /// The recipient's count for the day, read back from the table.
 async fn count(ddb: &Client, table: &str, recipient: &str, now: i64) -> Option<i64> {
-    let (partition, sort) = key(recipient, now).unwrap();
+    let (partition, sort) = key(recipient, Counter::General, now).unwrap();
     ddb.get_item()
         .table_name(table)
         .key("partitionKey", Av::S(partition))
@@ -139,9 +150,65 @@ async fn concurrent_requests_cannot_overshoot_the_cap() {
 
 #[test]
 fn the_row_names_the_mailbox_by_hash_never_the_address() {
-    let (partition, sort) = key("Vic.Tim+x@Gmail.com", NOON).unwrap();
-    assert_eq!(key("victim@googlemail.com", NOON).unwrap().0, partition);
+    let general = |recipient| key(recipient, Counter::General, NOON);
+    let (partition, sort) = general("Vic.Tim+x@Gmail.com").unwrap();
+    assert_eq!(general("victim@googlemail.com").unwrap().0, partition);
     assert!(partition.starts_with("MAIL#") && !partition.contains("victim"));
+    // Leyline's rows keep their meaning; resets have a sort key of their own.
     assert_eq!(sort, format!("SEND#{}", NOON / DAY_SECONDS));
-    assert_eq!(key("not-an-address", NOON), Err(Refusal::Invalid));
+    assert_eq!(
+        key("victim@gmail.com", Counter::PasswordReset, NOON).unwrap(),
+        (partition, format!("RESET#{}", NOON / DAY_SECONDS))
+    );
+    assert_eq!(general("not-an-address"), Err(Refusal::Invalid));
+}
+
+/// Used to be: reset requests, which anyone can make for any address, spent
+/// the same budget as sign-in codes and could use it up.
+#[tokio::test]
+async fn password_resets_and_other_codes_cannot_drain_each_other() {
+    let (ddb, table) = table().await;
+    let victim = "victim@example.com";
+    for n in 0..RESET_DAILY_CAP {
+        assert_eq!(
+            reset(&ddb, &table, victim, &format!("r{n}"), NOON).await,
+            Ok(())
+        );
+    }
+    assert_eq!(
+        reset(&ddb, &table, "victim+x@example.com", "over", NOON).await,
+        Err(Refusal::CapReached)
+    );
+    // Every other code still has its whole budget.
+    for n in 0..DAILY_CAP {
+        assert_eq!(
+            send(&ddb, &table, victim, &format!("m{n}"), NOON).await,
+            Ok(())
+        );
+    }
+    assert_eq!(
+        send(&ddb, &table, victim, "over-general", NOON).await,
+        Err(Refusal::CapReached)
+    );
+    // A retry of a counted reset is still allowed, and the next day is fresh.
+    assert_eq!(reset(&ddb, &table, victim, "r0", NOON).await, Ok(()));
+    assert_eq!(
+        reset(&ddb, &table, victim, "tomorrow", NOON + DAY_SECONDS).await,
+        Ok(())
+    );
+}
+
+/// A spent general budget leaves password recovery open.
+#[tokio::test]
+async fn a_spent_general_budget_leaves_resets() {
+    let (ddb, table) = table().await;
+    for n in 0..DAILY_CAP {
+        send(&ddb, &table, "victim@example.com", &format!("m{n}"), NOON)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        reset(&ddb, &table, "victim@example.com", "r", NOON).await,
+        Ok(())
+    );
 }

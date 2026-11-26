@@ -53,6 +53,20 @@ fn different_mailboxes_stay_different_people() {
     assert!(!same_mailbox("not an address", "not an address"));
 }
 
+/// Apple's three domains are one mailbox, so Apple asserting another of a
+/// person's addresses reaches the account they already have.
+#[test]
+fn apples_three_domains_are_one_person() {
+    for a in ["a@me.com", "a@mac.com", "a@icloud.com", "A+news@Me.com"] {
+        assert_eq!(person_key(a).unwrap(), "a@icloud.com", "{a}");
+        assert!(same_mailbox(a, "a@icloud.com"), "{a}");
+    }
+    assert!(!same_mailbox("a@me.com", "b@icloud.com"));
+    // Only Apple's own domains fold, and dots stay significant there.
+    assert!(!same_mailbox("a@me.com.example.com", "a@icloud.com"));
+    assert!(!same_mailbox("a.b@me.com", "ab@icloud.com"));
+}
+
 /// A tag fold alone proves nothing about who reads the mail outside Gmail.
 #[test]
 fn one_inbox_is_the_same_address_or_two_gmail_spellings() {

@@ -20,11 +20,14 @@ use sha2::{Digest, Sha256};
 
 use crate::cause::cause;
 
-/// Messages one mailbox may be sent in a UTC day. A person legitimately needs
-/// a handful (the signup code, a resend or two, a password reset), so eight
-/// leaves headroom, while a mail-bombed victim receives at most eight
-/// unwanted messages a day instead of as many as the attacker can request.
+/// Messages of [`Counter::General`] one mailbox may be sent in a UTC day. A
+/// person legitimately needs a handful (the signup code, a resend or two, a
+/// sign-in code), so eight leaves headroom, while a mail-bombed victim gets a
+/// bounded number a day instead of as many as the attacker can request.
 pub const DAILY_CAP: i64 = 8;
+
+/// Password reset messages one mailbox may be sent in a UTC day.
+pub const RESET_DAILY_CAP: i64 = 3;
 
 const DAY_SECONDS: i64 = 86_400;
 
@@ -44,16 +47,45 @@ pub enum Refusal {
     Unavailable,
 }
 
-/// The counter's key: one row per mailbox per UTC day.
-fn key(recipient: &str, now: i64) -> Result<(String, String), Refusal> {
+/// Which of a mailbox's daily counters a message draws on. Anyone can ask for
+/// a reset code for any address, so resets are counted apart: running them out
+/// leaves signup and sign-in codes untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Counter {
+    /// Signup, resend, attribute verification and sign-in codes.
+    General,
+    /// Password reset codes.
+    PasswordReset,
+}
+
+impl Counter {
+    /// The most messages this counter allows in a UTC day.
+    pub fn daily_cap(self) -> i64 {
+        match self {
+            Self::General => DAILY_CAP,
+            Self::PasswordReset => RESET_DAILY_CAP,
+        }
+    }
+
+    /// How the counter's rows start their sort key.
+    fn sort_prefix(self) -> &'static str {
+        match self {
+            Self::General => "SEND",
+            Self::PasswordReset => "RESET",
+        }
+    }
+}
+
+/// The counter's key: one row per mailbox per counter per UTC day.
+fn key(recipient: &str, counter: Counter, now: i64) -> Result<(String, String), Refusal> {
     let mailbox = person_key(recipient).map_err(|_| Refusal::Invalid)?;
     Ok((
         format!("MAIL#{}", hex::encode(Sha256::digest(mailbox.as_bytes()))),
-        format!("SEND#{}", now.div_euclid(DAY_SECONDS)),
+        format!("{}#{}", counter.sort_prefix(), now.div_euclid(DAY_SECONDS)),
     ))
 }
 
-/// Spend one message from `recipient`'s budget for the UTC day containing
+/// Spend one message from `recipient`'s `counter` for the UTC day containing
 /// `now` (Unix seconds), or say why not.
 ///
 /// `delivery` names the message (the sender's idempotency key): a retry of a
@@ -68,10 +100,10 @@ pub async fn spend(
     table: &str,
     recipient: &str,
     delivery: &str,
+    counter: Counter,
     now: i64,
-    cap: i64,
 ) -> Result<(), Refusal> {
-    let (partition, sort) = key(recipient, now)?;
+    let (partition, sort) = key(recipient, counter, now)?;
     // The rows outlive their day by one more, so a clock that is a little
     // behind the table's never reads a lapsed counter as a fresh budget.
     let expires = Av::N(((now.div_euclid(DAY_SECONDS) + 2) * DAY_SECONDS).to_string());
@@ -89,7 +121,7 @@ pub async fn spend(
         .condition_expression("attribute_not_exists(partitionKey)")
         .build()
         .map_err(|_| Refusal::Unavailable)?;
-    let counter = Update::builder()
+    let count = Update::builder()
         .table_name(table)
         .key("partitionKey", Av::S(partition))
         .key("sortKey", Av::S(sort))
@@ -97,14 +129,14 @@ pub async fn spend(
         .condition_expression("attribute_not_exists(#count) OR #count < :cap")
         .expression_attribute_names("#count", "count")
         .expression_attribute_values(":one", Av::N("1".into()))
-        .expression_attribute_values(":cap", Av::N(cap.to_string()))
+        .expression_attribute_values(":cap", Av::N(counter.daily_cap().to_string()))
         .expression_attribute_values(":expires", expires)
         .build()
         .map_err(|_| Refusal::Unavailable)?;
     let result = ddb
         .transact_write_items()
         .transact_items(TransactWriteItem::builder().put(marker).build())
-        .transact_items(TransactWriteItem::builder().update(counter).build())
+        .transact_items(TransactWriteItem::builder().update(count).build())
         .send()
         .await;
     match result {

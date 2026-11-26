@@ -7,7 +7,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{Code, MailDelivery, MailMessage, MessageKind, Refusal, Template, budget};
-use crate::{directory::now, triggers::ProductError};
+use crate::{
+    directory::{AwsDirectory, now},
+    triggers::ProductError,
+};
 
 /// The longest encrypted code accepted, in base64.
 const MAX_CODE_BYTES: usize = 32_768;
@@ -32,6 +35,9 @@ pub enum MailError {
     /// The event lacks a field.
     #[error("missing {0}")]
     MissingField(&'static str),
+    /// An identity rule refused the message, or could not be checked.
+    #[error(transparent)]
+    Identity(#[from] cardea_core::Error),
     /// The budget refused the message.
     #[error(transparent)]
     Refused(#[from] Refusal),
@@ -111,8 +117,13 @@ impl EmailSender {
 
     /// Send the message a `CustomEmailSender_*` event asks for. The answer is
     /// empty: the encrypted event is never echoed.
+    ///
+    /// `directory` is that of the event's pool. A code that would verify an
+    /// address other than the account's own mailbox is refused
+    /// ([`AwsDirectory::check_verification`]) with nothing spent or sent.
     pub async fn send(
         &self,
+        directory: &AwsDirectory,
         delivery: &dyn MailDelivery,
         event: &Value,
         request_id: &str,
@@ -123,20 +134,23 @@ impl EmailSender {
         let kind = MessageKind::from_trigger(required(event, "triggerSource")?)
             .ok_or(MailError::UnsupportedSource)?;
         let recipient = required(&event["request"]["userAttributes"], "email")?;
+        if kind == MessageKind::VerifyAttribute {
+            directory.check_verification_event(event).await?;
+        }
         let template = delivery.template(kind).map_err(MailError::Template)?;
         let key = delivery_key(event, &template, request_id);
         // Spent before decrypting or sending anything, so a refused request
         // costs one transaction. The delivery key names the message: a retry
         // of one already counted spends nothing, so retries after a failed
         // send cannot drain a recipient's budget.
-        if kind.counted() {
+        if let Some(counter) = kind.counter() {
             budget::spend(
                 &self.ddb,
                 &self.budget_table,
                 recipient,
                 &key,
+                counter,
                 now(),
-                budget::DAILY_CAP,
             )
             .await?;
         }

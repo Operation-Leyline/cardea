@@ -91,6 +91,25 @@ async fn another_verified_domain_needs_a_session_link() {
     assert_eq!(resolve(&directory, &identity, None).await, Ok(user));
 }
 
+/// Apple asserting another of a person's three addresses signs in to the
+/// account they already have.
+#[tokio::test]
+async fn another_apple_domain_reaches_the_same_account() {
+    for (registered, asserted) in [
+        ("owner@me.com", "owner@icloud.com"),
+        ("owner@icloud.com", "owner@mac.com"),
+    ] {
+        let directory = Mock::default();
+        let user = native(&directory, registered);
+        assert_eq!(
+            resolve(&directory, &apple("a", asserted, false), None).await,
+            Ok(user),
+            "{registered} {asserted}"
+        );
+        assert_eq!(directory.0.lock().unwrap().creates, 0);
+    }
+}
+
 #[tokio::test]
 async fn google_and_apple_share_one_account_and_keep_separate_bindings() {
     let directory = Mock::default();

@@ -15,7 +15,11 @@
     ["owner@googlemail.example.com", "owner@googlemail.example.com"],
     ["+tag@example.com", "+tag@example.com"],
     ["+tag@gmail.com", "+tag@gmail.com"],
-    ["...@gmail.com", "...@gmail.com"]
+    ["...@gmail.com", "...@gmail.com"],
+    ["owner@me.com", "owner@icloud.com"],
+    ["Owner+news@Mac.com", "owner@icloud.com"],
+    ["first.last@icloud.com", "first.last@icloud.com"],
+    ["owner@me.com.example.com", "owner@me.com.example.com"]
   ],
   "invalid": ["", "@x", "a@", "a@b@c", "a b@c", "a\n@c", "no-at-sign"]
 }

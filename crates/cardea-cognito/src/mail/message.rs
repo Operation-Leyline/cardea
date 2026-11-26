@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 
+use super::Counter;
 use crate::triggers::ProductError;
 
 /// What a message is for.
@@ -49,13 +50,19 @@ impl MessageKind {
         }
     }
 
-    /// Whether the message draws on the recipient's daily budget. Everything a
-    /// caller can request for someone else's address does; a temporary
-    /// password is an operator's act and a security alert follows a detection,
-    /// so neither is something a stranger can aim at a victim, and a victim
-    /// must always get the alert.
-    pub fn counted(self) -> bool {
-        !matches!(self, Self::TemporaryPassword | Self::SecurityAlert)
+    /// The daily budget the message draws on, if any. Everything a caller can
+    /// request for someone else's address draws on one; a temporary password
+    /// is an operator's act and a security alert follows a detection, so
+    /// neither is something a stranger can aim at a victim, and a victim must
+    /// always get the alert.
+    pub fn counter(self) -> Option<Counter> {
+        match self {
+            Self::PasswordReset => Some(Counter::PasswordReset),
+            Self::VerifyEmail | Self::VerifyAttribute | Self::Authentication => {
+                Some(Counter::General)
+            }
+            Self::TemporaryPassword | Self::SecurityAlert => None,
+        }
     }
 }
 

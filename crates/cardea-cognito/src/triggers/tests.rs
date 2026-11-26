@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 use super::*;
 use crate::testing::{Fixture, cognito::SUB, fixture, product::FakeProduct};
 
+mod inbound_attributes;
+mod verification;
+
 fn product(fixture: &Fixture) -> FakeProduct {
     FakeProduct::new(fixture.directory.dynamodb().clone())
 }
@@ -92,9 +95,14 @@ async fn a_first_federated_sign_in_creates_links_and_succeeds() {
         let product = product(&fixture);
         let subject = event["request"]["attributes"]["idToken"]["sub"].clone();
         let answer = handle(&fixture.directory, &product, event).await.unwrap();
+        let profile = &answer["response"]["userAttributesToMap"];
         assert_eq!(
-            answer["response"]["userAttributesToMap"],
-            json!({"sub":subject,"email":email,"email_verified":"true"})
+            (
+                &profile["sub"],
+                &profile["email"],
+                &profile["email_verified"]
+            ),
+            (&subject, &json!(email), &json!("true"))
         );
         assert!(fixture.item(key).await.is_some(), "{key}");
         {
@@ -414,8 +422,9 @@ async fn an_unknown_trigger_is_refused() {
     let fixture = fixture().await;
     let product = product(&fixture);
     for source in [
-        "CustomMessage_SignUp",
         "PreAuthentication_Authentication",
+        "NoSuchTrigger_SignUp",
+        "CustomMessage",
         "",
     ] {
         assert!(matches!(

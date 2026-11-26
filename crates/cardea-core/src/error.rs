@@ -17,6 +17,9 @@ pub enum Error {
     /// reports it as `recentSignInRequired`, and the person signs in again.
     #[error("sign in again, then link this provider")]
     RecentSignInRequired,
+    /// The address to verify is not the account's own mailbox.
+    #[error("changing your email address is not supported")]
+    EmailChange,
     /// Ownership records disagree. Nothing was created.
     #[error("identity ownership requires recovery; no new account was created")]
     Conflict,

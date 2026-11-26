@@ -6,6 +6,7 @@ use lambda_runtime::{LambdaEvent, service_fn};
 use serde_json::Value;
 
 use super::{EmailSender, KmsDecryptor, MailDelivery, MailError};
+use crate::directory::{AwsDirectory, config};
 
 /// The environment variable naming the budget's table.
 const TABLE_VARIABLE: &str = "MAIL_BUDGET_TABLE";
@@ -30,17 +31,40 @@ impl EmailSender {
     }
 }
 
+/// Send one event's message, against the directory of the pool it names.
+async fn answer(
+    sender: &EmailSender,
+    delivery: &dyn MailDelivery,
+    config: &aws_config::SdkConfig,
+    event: LambdaEvent<Value>,
+) -> Result<Value, lambda_runtime::Error> {
+    let pool = event.payload["userPoolId"]
+        .as_str()
+        .filter(|pool| !pool.is_empty())
+        .ok_or(MailError::MissingField("userPoolId"))?;
+    let directory = AwsDirectory::from_env_with(config, pool.into())?;
+    Ok(sender
+        .send(
+            &directory,
+            delivery,
+            &event.payload,
+            &event.context.request_id,
+        )
+        .await?)
+}
+
 /// [`run`] on a Tokio runtime the caller already has.
 pub async fn serve(delivery: impl MailDelivery) -> Result<(), lambda_runtime::Error> {
-    let shared = Arc::new((EmailSender::from_env().await?, delivery));
+    let shared = Arc::new((
+        EmailSender::from_env().await?,
+        delivery,
+        config::load().await,
+    ));
     lambda_runtime::run(service_fn(move |event: LambdaEvent<Value>| {
         let shared = Arc::clone(&shared);
         async move {
-            let (sender, delivery) = &*shared;
-            sender
-                .send(delivery, &event.payload, &event.context.request_id)
-                .await
-                .map_err(lambda_runtime::Error::from)
+            let (sender, delivery, config) = &*shared;
+            answer(sender, delivery, config, event).await
         }
     }))
     .await
