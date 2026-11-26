@@ -41,7 +41,8 @@ pub(super) struct Survey {
     users: usize,
     /// Rows already in place.
     pub present: RowCounts,
-    /// Rows to write, a user's mailbox before their bindings and list.
+    /// Rows to write: a user's mailbox, then their list, then the bindings it
+    /// leads to.
     pub missing: Vec<Missing>,
     findings: Vec<Finding>,
 }
@@ -111,26 +112,28 @@ fn check_claim(
     user: &User,
     claimants: &Claimants<'_>,
 ) -> Result<(), Problem> {
-    if let Some(holder) = &row.user_id {
-        return if *holder == user.user_id {
-            Ok(())
-        } else {
-            Err(Problem::MailboxHeld {
-                holder: Some(holder.clone()),
-            })
-        };
-    }
-    // Claimed under the pool's username, or under the address as signup does.
-    let claimed = &row.record.username;
-    if *claimed != user.username && !claimed.eq_ignore_ascii_case(&user.email) {
+    if let Some(holder) = row.user_id.as_ref().filter(|id| **id != user.user_id) {
         return Err(Problem::MailboxHeld {
-            holder: claimants
-                .usernames
-                .get(claimed.as_str())
-                .map(|id| (*id).to_owned()),
+            holder: Some(holder.clone()),
         });
     }
-    if row.unconfirmed_expires_at.is_some() && account.standing != Standing::Unconfirmed {
+    let bound = row.user_id.is_some();
+    // A sign-in looks the row's username up, so it must still reach this
+    // account: the pool's username, or the address, as signup writes it.
+    let claimed = &row.record.username;
+    if *claimed != user.username && !claimed.eq_ignore_ascii_case(&user.email) {
+        return Err(if bound {
+            Problem::StaleClaim
+        } else {
+            Problem::MailboxHeld {
+                holder: claimants
+                    .usernames
+                    .get(claimed.as_str())
+                    .map(|id| (*id).to_owned()),
+            }
+        });
+    }
+    if !bound && row.unconfirmed_expires_at.is_some() && account.standing != Standing::Unconfirmed {
         return Err(Problem::LapsingClaim);
     }
     Ok(())
@@ -139,8 +142,8 @@ fn check_claim(
 /// The mailbox row `account` should have.
 fn new_claim(account: &PoolAccount, user: &User, person: String) -> Result<EmailRow, Error> {
     let unconfirmed = account.standing == Standing::Unconfirmed;
-    let origin = match (account.standing, &account.first_provider) {
-        (Standing::Federated, Some(provider)) => provider.clone(),
+    let origin = match (account.standing, account.first_provider()) {
+        (Standing::Federated, Some(provider)) => provider.to_owned(),
         _ => NATIVE_ORIGIN.to_owned(),
     };
     Ok(EmailRow {
@@ -206,7 +209,7 @@ impl AwsDirectory {
         });
         let federated = account.standing == Standing::Federated;
         let Some(identities) =
-            identities.filter(|_| !federated || account.first_provider.is_some())
+            identities.filter(|_| !federated || account.first_provider().is_some())
         else {
             survey.find(&user_id, Problem::UnreadableIdentities);
             return Ok(());
@@ -216,7 +219,7 @@ impl AwsDirectory {
         } else if account.standing != Standing::Unconfirmed && !account.email_verified {
             survey.find(&user_id, Problem::UnverifiedEmail);
         }
-        if account.unsupported_provider {
+        if account.has_unsupported_provider() {
             survey.find(&user_id, Problem::UnsupportedProvider);
         }
         let sharing = &claimants.mailboxes[&person];
@@ -253,12 +256,13 @@ impl AwsDirectory {
             }
             Err(error) => return Err(error.into()),
         }
+        // The list first, so that a run that stops leaves no binding without it.
+        if !identities.is_empty() {
+            self.survey_list(&user, identities, survey).await?;
+        }
         for identity in identities {
             self.survey_binding(&user, identity, claimants, survey)
                 .await?;
-        }
-        if !identities.is_empty() {
-            self.survey_list(&user, identities, survey).await?;
         }
         Ok(())
     }

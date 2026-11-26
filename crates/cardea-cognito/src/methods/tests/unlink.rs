@@ -185,10 +185,7 @@ async fn a_user_without_a_list_can_unlink() {
     let f = fixture().await;
     let alice = f.account("alice", "Cognito").await;
     f.pool_link("alice", GOOGLE, "google-1");
-    f.directory
-        .claim_provider(GOOGLE, "google-1", &alice)
-        .await
-        .unwrap();
+    f.unlisted_binding(&alice, GOOGLE, "google-1").await;
 
     unlink(&f, &alice, GOOGLE).await.unwrap();
 

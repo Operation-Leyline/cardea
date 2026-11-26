@@ -2,9 +2,9 @@
 //!
 //! A repeat may come after the user is gone from the pool, so whatever only the
 //! pool knows is written into the directory here: each linked identity goes on
-//! the user's list, and an unbound mailbox row the pool shows to be the user's
-//! gets its `userId`. [`erase_user`](super::erase_user) then needs nothing but
-//! the rows themselves.
+//! the user's list, with the pool's address if the caller named another, and an
+//! unbound mailbox row the pool shows to be the user's gets its `userId`. A
+//! repeat then needs only the caller's [`User`] and the rows.
 
 use aws_sdk_cognitoidentityprovider::operation::admin_get_user::AdminGetUserOutput;
 use cardea_core::{Directory, Error, User, person_key};
@@ -61,15 +61,15 @@ pub async fn plan_erasure(directory: &AwsDirectory, user: &User) -> Result<Erasu
         Some(account) => identities_of(account.user_attributes())?,
         None => Vec::new(),
     };
-    let identities = directory.record_identities(user, &linked).await?;
+    // The pool's address, should it reach another mailbox than the caller's.
+    let held = account
+        .as_ref()
+        .and_then(|account| attribute(account, "email"))
+        .filter(|held| person_key(held).is_ok_and(|key| person_key(&user.email) != Ok(key)));
+    let list = directory.record_for_erasure(user, &linked, held).await?;
     let mut mailboxes = vec![user.email.clone()];
-    if let Some(account) = &account {
-        // The pool's address, should it differ from the caller's.
-        if let Some(held) = attribute(account, "email")
-            && person_key(held).is_ok_and(|key| person_key(&user.email) != Ok(key))
-        {
-            mailboxes.push(held.to_owned());
-        }
+    mailboxes.extend(list.erasing_mailboxes.into_iter().flatten());
+    if account.is_some() {
         for mailbox in &mailboxes {
             directory.bind_claim(mailbox, user).await?;
         }
@@ -77,7 +77,7 @@ pub async fn plan_erasure(directory: &AwsDirectory, user: &User) -> Result<Erasu
     Ok(ErasurePlan {
         user: user.clone(),
         mailboxes,
-        identities,
+        identities: list.identities.iter().map(named).collect(),
     })
 }
 
@@ -94,13 +94,14 @@ impl AwsDirectory {
             .filter(|raw| attribute(raw, "sub") == Some(user.user_id.as_str())))
     }
 
-    /// Add `linked` to the user's list, and return every identity the list then
-    /// holds.
-    async fn record_identities(
+    /// Add `linked` and the address `held` to the user's list, and return the
+    /// list as it then is. A user with neither and no list gets none.
+    async fn record_for_erasure(
         &self,
         user: &User,
         linked: &[Identity],
-    ) -> Result<Vec<(String, String)>, Error> {
+        held: Option<&str>,
+    ) -> Result<MethodsRow, Error> {
         for _ in 0..ATTEMPTS {
             let read = self.methods_row(user).await?;
             let version = read.as_ref().map_or(0, |row| row.version);
@@ -108,13 +109,18 @@ impl AwsDirectory {
             for identity in linked {
                 next.entry(identity);
             }
-            let identities = next.identities.iter().map(named).collect();
+            if let Some(held) = held {
+                let mailboxes = next.erasing_mailboxes.get_or_insert_default();
+                if !mailboxes.iter().any(|mailbox| mailbox == held) {
+                    mailboxes.push(held.to_owned());
+                }
+            }
             let unchanged = match &read {
                 Some(row) => *row == next,
-                None => next.identities.is_empty(),
+                None => next == MethodsRow::empty(user),
             };
-            if unchanged || self.replace_methods_row(version, next).await? {
-                return Ok(identities);
+            if unchanged || self.replace_methods_row(version, next.clone()).await? {
+                return Ok(next);
             }
         }
         Err(Error::Unavailable)

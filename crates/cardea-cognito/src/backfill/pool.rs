@@ -1,5 +1,7 @@
 //! Every user of the pool, as the backfill reads them.
 
+use std::collections::HashSet;
+
 use aws_sdk_cognitoidentityprovider::{error::ProvideErrorMetadata, types::UserType};
 use serde_json::Value;
 
@@ -38,10 +40,9 @@ pub(super) struct PoolAccount {
     /// The linked identities of providers this library knows; `None` when the
     /// list cannot be read.
     pub identities: Option<Vec<Identity>>,
-    /// The first provider the pool lists, known or not.
-    pub first_provider: Option<String>,
-    /// Whether the list names a provider this library does not know.
-    pub unsupported_provider: bool,
+    /// Every `(providerName, subject)` the pool lists on the user, known
+    /// provider or not.
+    listed: Vec<(String, String)>,
 }
 
 impl PoolAccount {
@@ -52,10 +53,18 @@ impl PoolAccount {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
         };
-        let listed: Vec<Value> = value_of(attributes, "identities")
+        let entries: Vec<Value> = value_of(attributes, "identities")
             .and_then(|value| serde_json::from_str(value).ok())
             .unwrap_or_default();
-        let identities = identities_of(attributes).ok();
+        let listed = entries
+            .iter()
+            .filter_map(|identity| {
+                Some((
+                    identity["providerName"].as_str()?.to_owned(),
+                    identity["userId"].as_str()?.to_owned(),
+                ))
+            })
+            .collect();
         Self {
             user_id: text("sub"),
             username: user.username().unwrap_or_default().to_owned(),
@@ -67,20 +76,52 @@ impl PoolAccount {
                 Some("EXTERNAL_PROVIDER") => Standing::Federated,
                 _ => Standing::NoPassword,
             },
-            first_provider: listed
-                .first()
-                .and_then(|identity| identity["providerName"].as_str())
-                .map(str::to_owned),
-            unsupported_provider: identities
-                .as_ref()
-                .is_some_and(|known| known.len() < listed.len()),
-            identities,
+            identities: identities_of(attributes).ok(),
+            listed,
         }
+    }
+
+    /// The first provider the pool lists, known or not.
+    pub fn first_provider(&self) -> Option<&str> {
+        self.listed.first().map(|(provider, _)| provider.as_str())
+    }
+
+    /// Whether the list names a provider this library does not know.
+    pub fn has_unsupported_provider(&self) -> bool {
+        self.identities
+            .as_ref()
+            .is_some_and(|known| known.len() < self.listed.len())
     }
 }
 
+/// The username Cognito gives an identity's own profile: the provider's name,
+/// `_`, the subject. Compared in lowercase, as Cognito writes either case.
+fn profile_name(provider: &str, subject: &str) -> String {
+    format!("{provider}_{subject}").to_ascii_lowercase()
+}
+
+/// Leave out the profiles of linked identities. `ListUsers` shows such a profile
+/// beside the user the identity is linked to; it is that person's sign-in, not
+/// another user. A federated-only user lists only itself, and stays.
+fn without_linked_profiles(mut accounts: Vec<PoolAccount>) -> Vec<PoolAccount> {
+    let linked: HashSet<String> = accounts
+        .iter()
+        .flat_map(|account| {
+            let own = account.username.to_ascii_lowercase();
+            account
+                .listed
+                .iter()
+                .map(|(provider, subject)| profile_name(provider, subject))
+                .filter(move |name| *name != own)
+        })
+        .collect();
+    accounts.retain(|account| !linked.contains(&account.username.to_ascii_lowercase()));
+    accounts
+}
+
 impl AwsDirectory {
-    /// Every user of the pool, page by page.
+    /// Every user of the pool, page by page, linked identities' own profiles
+    /// apart.
     pub(super) async fn all_accounts(&self) -> Result<Vec<PoolAccount>, BackfillError> {
         let mut accounts = Vec::new();
         let mut token = None;
@@ -99,7 +140,7 @@ impl AwsDirectory {
             accounts.extend(page.users().iter().map(PoolAccount::read));
             token = page.pagination_token().map(str::to_owned);
             if token.is_none() {
-                return Ok(accounts);
+                return Ok(without_linked_profiles(accounts));
             }
         }
     }

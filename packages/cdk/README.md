@@ -294,8 +294,10 @@ already in use, such as Leyline's, has its marker.
 `cardea-backfill`, in the `cardea-cognito` crate, gives every pool user their
 directory rows and then writes the marker (DESIGN.md, "Backfilling an existing
 pool"). Deploy the Cardea triggers first: from then until the marker is written
-they refuse new accounts and provider sign-ins, so do not leave it long. From a
-checkout of this repository, with your own credentials:
+they refuse new accounts and provider sign-ins, so do not leave it long. Do wait
+some minutes after the deploy before activating: `ListUsers` is eventually
+consistent, and an account made just before the deploy may not be listed yet.
+From a checkout of this repository, with your own credentials:
 
 ```bash
 # Dry run: counts and findings, nothing written.
@@ -316,8 +318,10 @@ settle each line under "to settle" and run it again. Read the notes too; a user
 that exists only behind a provider sign-in must be converted to a native user
 before they can sign in.
 
-A run against a directory that is already open only reports. If the marker was
-written before the backfill, delete the `SYSTEM#READY` item and run it.
+A run against a directory that is already open only reports. Run it once more
+without flags after activating: it lists any user without rows. To write them, or
+if the marker was written before the backfill, delete the `SYSTEM#READY` item
+and run it with `--apply --activate`.
 
 ## Domains
 

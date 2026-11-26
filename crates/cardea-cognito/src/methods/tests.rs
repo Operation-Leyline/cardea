@@ -9,6 +9,7 @@ use crate::{
     testing::{Fixture, fixture},
 };
 
+mod bind;
 mod list;
 mod partial;
 mod sign_in;

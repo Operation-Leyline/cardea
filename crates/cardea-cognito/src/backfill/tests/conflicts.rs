@@ -3,6 +3,7 @@
 use cardea_core::{Directory, EmailOwner};
 
 use super::*;
+use crate::record::EmailRow;
 
 async fn claim(f: &Fixture, email: &str, username: &str) {
     f.directory
@@ -54,10 +55,7 @@ async fn a_subject_bound_elsewhere_is_reported_and_kept() {
         username: "carol".into(),
         email: "carol@example.com".into(),
     };
-    f.directory
-        .claim_provider(GOOGLE, "google-1", &carol)
-        .await
-        .unwrap();
+    f.unlisted_binding(&carol, GOOGLE, "google-1").await;
 
     let report = run(&f, Mode::Apply).await;
 
@@ -87,10 +85,7 @@ async fn a_binding_with_an_old_address_is_reported() {
         email: "old@example.com".into(),
         ..alice
     };
-    f.directory
-        .claim_provider(GOOGLE, "google-1", &old)
-        .await
-        .unwrap();
+    f.unlisted_binding(&old, GOOGLE, "google-1").await;
 
     let report = run(&f, Mode::Apply).await;
 
@@ -112,6 +107,34 @@ async fn a_mailbox_held_by_another_claim_is_left_as_it_is() {
     assert_eq!(report.findings, [finding("alice", held)]);
     assert_eq!(report.written, counts(0, 0, 0));
     assert_eq!(f.item("EMAIL#alice@example.com").await, before);
+}
+
+/// The row names the user, but a sign-in looks its username up and finds
+/// nobody.
+#[tokio::test]
+async fn a_claim_under_a_username_the_pool_dropped_blocks() {
+    let f = closed().await;
+    let alice = user(&f, "alice", "CONFIRMED");
+    f.directory
+        .put_new(&EmailRow {
+            person: "alice@example.com".into(),
+            record: EmailOwner {
+                email: "alice+old@example.com".into(),
+                username: "alice+old@example.com".into(),
+                origin: "Cognito".into(),
+            },
+            user_id: Some(alice.user_id),
+            unconfirmed_expires_at: None,
+            password_initialization: None,
+            password_set: None,
+        })
+        .await
+        .unwrap();
+
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::ActivationRefused);
+    assert_eq!(report.findings, [finding("alice", Problem::StaleClaim)]);
 }
 
 #[tokio::test]

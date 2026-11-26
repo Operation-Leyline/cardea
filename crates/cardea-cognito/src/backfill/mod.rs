@@ -16,8 +16,10 @@
 //! opened while a blocking one remains.
 //!
 //! Run it after the Cardea triggers are deployed, which refuse new accounts
-//! until the directory is open, so that none can appear outside it. The
-//! `cardea-backfill` binary runs it from a terminal. It needs
+//! until the directory is open, so that none can appear outside it. Cognito's
+//! `ListUsers` is eventually consistent, and an open directory is only read: wait
+//! some minutes after the deployment, so that accounts made just before it are
+//! listed. The `cardea-backfill` binary runs it from a terminal. It needs
 //! `cognito-idp:ListUsers` on the pool, and `GetItem` and `PutItem` on the
 //! table.
 //!

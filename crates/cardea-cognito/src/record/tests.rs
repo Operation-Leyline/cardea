@@ -213,10 +213,22 @@ fn a_methods_row_keys_its_user_and_lists_identities_as_compact_json() {
                 removing: true,
             },
         ],
+        erasing_mailboxes: None,
     };
     assert_eq!(MethodsRow::from_item(&stored).unwrap(), row);
     assert_eq!(row.to_item().unwrap(), stored);
     assert!(!format!("{row:?}").contains("Example.com"));
+
+    // An erasure under way adds the addresses only the pool knew.
+    let mut erasing = stored;
+    erasing.insert("erasingMailboxes".into(), s(r#"["held@Other.com"]"#));
+    let row = MethodsRow {
+        erasing_mailboxes: Some(vec!["held@Other.com".into()]),
+        ..row
+    };
+    assert_eq!(MethodsRow::from_item(&erasing).unwrap(), row);
+    assert_eq!(row.to_item().unwrap(), erasing);
+    assert!(!format!("{row:?}").contains("Other.com"));
 }
 
 /// An owner record that is not the owner's JSON is refused, never read as

@@ -105,6 +105,46 @@ async fn the_status_decides_the_password_and_whether_the_claim_lapses() {
     }
 }
 
+/// `ListUsers` shows a linked identity's own profile beside the user, whether
+/// or not that profile carries a list of its own.
+#[tokio::test]
+async fn a_linked_identitys_own_profile_is_not_a_second_user() {
+    for profile_lists_itself in [false, true] {
+        let f = closed().await;
+        let alice = user(&f, "alice", "CONFIRMED");
+        f.pool_link("alice", GOOGLE, "google-1");
+        f.pool_link("alice", APPLE, "apple-1");
+        f.pool.add(
+            "google_google-1",
+            "sub-of-profile",
+            "alice@example.com",
+            "EXTERNAL_PROVIDER",
+        );
+        f.pool.add(
+            "SignInWithApple_apple-1",
+            "sub-of-other-profile",
+            "relay@privaterelay.appleid.com",
+            "EXTERNAL_PROVIDER",
+        );
+        if profile_lists_itself {
+            f.pool_link("google_google-1", GOOGLE, "google-1");
+        }
+        f.pool.state().page_size = 1;
+
+        let report = run(&f, Mode::ApplyAndActivate).await;
+
+        assert_eq!(report.outcome, Outcome::Activated);
+        assert_eq!(report.users, 1);
+        assert_eq!(report.findings, []);
+        assert_eq!(report.written, counts(1, 2, 1));
+        assert!(!present(&f, "EMAIL#relay@privaterelay.appleid.com").await);
+        assert_eq!(
+            f.directory.provider(GOOGLE, "google-1").await.unwrap(),
+            Some(alice)
+        );
+    }
+}
+
 #[tokio::test]
 async fn every_page_is_read_and_a_repeat_writes_nothing() {
     let f = closed().await;

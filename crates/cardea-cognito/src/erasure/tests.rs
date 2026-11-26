@@ -10,6 +10,7 @@ use crate::{
     transact,
 };
 
+mod interrupted;
 mod retry;
 mod reuse;
 
@@ -98,10 +99,7 @@ async fn an_identity_only_the_pool_lists_is_recorded_then_erased() {
     let alice = f.account("alice", "Cognito").await;
     provision(&f, &alice).await;
     f.pool_link("alice", GOOGLE, "google-1");
-    f.directory
-        .claim_provider(GOOGLE, "google-1", &alice)
-        .await
-        .unwrap();
+    f.unlisted_binding(&alice, GOOGLE, "google-1").await;
     assert!(!present(&f, LIST).await);
 
     let planned = plan(&f, &alice).await;

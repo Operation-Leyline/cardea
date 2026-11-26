@@ -7,6 +7,7 @@ use tabulary::WriteError;
 use crate::{
     directory::AwsDirectory,
     record::{LinkedIdentity, MethodsRow, MethodsRowAttrs, MethodsRowKey, ProviderRow},
+    transact,
 };
 
 /// How often a change is tried while others keep winning.
@@ -26,6 +27,7 @@ impl MethodsRow {
             user_id: user.user_id.clone(),
             version: 0,
             identities: Vec::new(),
+            erasing_mailboxes: None,
         }
     }
 
@@ -96,5 +98,32 @@ impl AwsDirectory {
             // It may have landed. Every change here can be repeated.
             Err(_) => Err(Error::Unavailable),
         }
+    }
+
+    /// [`AwsDirectory::replace_methods_row`] and the creation of `binding`, as
+    /// one transaction. `false` when it was refused or not answered: the caller
+    /// reads both rows again to learn which.
+    pub(super) async fn replace_methods_row_binding(
+        &self,
+        read: i64,
+        mut next: MethodsRow,
+        binding: &ProviderRow,
+    ) -> Result<bool, Error> {
+        next.version = read + 1;
+        let rows = self.rows()?;
+        let put = rows.put(&next);
+        let put = if read == 0 {
+            put.expect_new()
+        } else {
+            put.condition(MethodsRowAttrs::VERSION.eq(read))
+        };
+        let list = put.into_tx().map_err(|_| Error::Invalid)?;
+        let binding = rows
+            .put(binding)
+            .expect_new()
+            .into_tx()
+            .map_err(|_| Error::Invalid)?;
+        let items = vec![list.input().clone(), binding.input().clone()];
+        Ok(transact(self.dynamodb(), items).await.is_ok())
     }
 }

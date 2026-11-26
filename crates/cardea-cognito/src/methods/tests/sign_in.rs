@@ -62,10 +62,7 @@ async fn a_sign_in_fills_in_a_missing_address() {
     let f = fixture().await;
     let alice = f.account("alice", "Cognito").await;
     f.pool_link("alice", GOOGLE, "google-1");
-    f.directory
-        .claim_provider(GOOGLE, "google-1", &alice)
-        .await
-        .unwrap();
+    f.unlisted_binding(&alice, GOOGLE, "google-1").await;
     assert_eq!(list(&f, &alice).await[1], provider(GOOGLE, None));
 
     f.directory
@@ -87,10 +84,7 @@ async fn a_first_sign_in_lists_every_identity_the_pool_links() {
     let alice = f.account("alice", "Cognito").await;
     for (method, subject) in [(GOOGLE, "google-1"), (APPLE, "apple-1")] {
         f.pool_link("alice", method, subject);
-        f.directory
-            .claim_provider(method, subject, &alice)
-            .await
-            .unwrap();
+        f.unlisted_binding(&alice, method, subject).await;
     }
 
     f.directory
@@ -118,10 +112,7 @@ async fn a_first_link_that_adds_nothing_still_saves_the_list() {
     let f = fixture().await;
     let alice = f.account("alice", "Cognito").await;
     f.pool_link("alice", GOOGLE, "google-1");
-    f.directory
-        .claim_provider(GOOGLE, "google-1", &alice)
-        .await
-        .unwrap();
+    f.unlisted_binding(&alice, GOOGLE, "google-1").await;
 
     f.directory
         .pre_signup(external_sign_up(GOOGLE, "google-1"))

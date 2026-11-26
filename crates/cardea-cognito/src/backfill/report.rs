@@ -81,6 +81,10 @@ pub enum Problem {
         /// The user the row names, when it can be told.
         holder: Option<String>,
     },
+    /// The mailbox's row names this user under a username that is neither the
+    /// pool's nor their address, which a sign-in cannot follow. Nothing was
+    /// written for them.
+    StaleClaim,
     /// The mailbox's row is this user's unconfirmed claim, which will lapse,
     /// although the user is past confirmation.
     LapsingClaim,
@@ -145,6 +149,9 @@ impl fmt::Display for Problem {
             Self::MailboxHeld { holder: None } => {
                 f.write_str("has a mailbox whose row belongs to another claim")
             }
+            Self::StaleClaim => {
+                f.write_str("has a mailbox row under a username the pool no longer answers to")
+            }
             Self::LapsingClaim => f.write_str(
                 "is past confirmation but holds a claim that lapses; delete that row and run again",
             ),
@@ -189,7 +196,8 @@ impl fmt::Display for Problem {
 pub struct BackfillReport {
     /// How the run ended.
     pub outcome: Outcome,
-    /// Users the pool listed, in the last pass.
+    /// Users the pool listed in the last pass, linked identities' own profiles
+    /// apart.
     pub users: usize,
     /// Rows that were in place before the run.
     pub present: RowCounts,

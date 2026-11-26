@@ -5,9 +5,9 @@
 //! not free while its identities still lead to the old account; the user's list
 //! goes last, because it is how a repeat finds the bindings.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use cardea_core::{Directory, Error, User};
+use cardea_core::{Directory, Error, User, person_key};
 use tabulary::{FailureKind, WriteError};
 
 use super::{ErasureError, ErasurePlan, plan::named};
@@ -42,16 +42,6 @@ enum Row {
     Removed,
 }
 
-impl ErasureReport {
-    fn count(&mut self, row: Row, removed: fn(&mut Self) -> &mut usize) {
-        match row {
-            Row::Absent => {}
-            Row::Kept => self.kept += 1,
-            Row::Removed => *removed(self) += 1,
-        }
-    }
-}
-
 /// Delete the directory rows of the user `plan` names, **after** the user is
 /// gone from the pool. Safe to repeat; see [the order](crate::erasure).
 ///
@@ -67,22 +57,41 @@ pub async fn erase_user(
         return Err(ErasureError::UserStillExists);
     }
     let mut report = ErasureReport::default();
-    let mut seen = BTreeSet::new();
-    let mut mailboxes = plan.mailboxes.iter();
-    // Again only when the list changed while its identities were being erased.
+    let (mut kept_bindings, mut kept_claims) = (BTreeSet::new(), BTreeSet::new());
+    // Again only when the list changed while its rows were being erased.
     for _ in 0..ATTEMPTS {
         let list = directory.methods_row(user).await?;
         let listed = list.iter().flat_map(|row| row.identities.iter().map(named));
-        for identity in plan.identities.iter().cloned().chain(listed) {
-            if seen.insert(identity.clone()) {
-                let row = directory.erase_binding(user, identity).await?;
-                report.count(row, |report| &mut report.providers);
+        let identities: BTreeSet<_> = plan.identities.iter().cloned().chain(listed).collect();
+        // All of them each time: a link under way may have bound one since it
+        // was last looked at, which is what changes the list.
+        for identity in identities {
+            match directory.erase_binding(user, &identity).await? {
+                Row::Absent => {}
+                Row::Removed => report.providers += 1,
+                Row::Kept => {
+                    kept_bindings.insert(identity);
+                }
             }
         }
-        for mailbox in mailboxes.by_ref() {
-            let row = directory.erase_claim(user, mailbox).await?;
-            report.count(row, |report| &mut report.emails);
+        let learned = list
+            .iter()
+            .flat_map(|row| row.erasing_mailboxes.iter().flatten());
+        // By mailbox, so that two spellings of one are one row.
+        let mut mailboxes = BTreeMap::new();
+        for address in plan.mailboxes.iter().chain(learned) {
+            mailboxes.insert(person_key(address)?, address);
         }
+        for (mailbox, address) in mailboxes {
+            match directory.erase_claim(user, address).await? {
+                Row::Absent => {}
+                Row::Removed => report.emails += 1,
+                Row::Kept => {
+                    kept_claims.insert(mailbox);
+                }
+            }
+        }
+        report.kept = kept_bindings.len() + kept_claims.len();
         let Some(list) = list else {
             return Ok(report);
         };
@@ -99,7 +108,7 @@ impl AwsDirectory {
     async fn erase_binding(
         &self,
         user: &User,
-        (provider, subject): (String, String),
+        (provider, subject): &(String, String),
     ) -> Result<Row, Error> {
         let key =
             || ProviderRowKey::new(provider.clone(), subject.clone()).map_err(|_| Error::Invalid);

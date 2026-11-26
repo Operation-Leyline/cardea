@@ -105,7 +105,7 @@ Leyline row moves. Partition key `identityKey`, TTL attribute `expiresAt`.
 | `PROVIDER#Google#{subject}` | unchanged; Google keeps this exact key |
 | `PROVIDER#{Provider}#{subject}` | new providers, same attributes |
 | `LINK#{userId}#{linkId}` | link challenge: provider (a row without it is Google), nonce, deadline, proof digest, receipt; 24 h TTL |
-| `METHODS#{userId}` | new: the identities linked onto the user (provider, subject, the email as the provider gave it, whether an unlink is unfinished) and a `version` every write is conditional on |
+| `METHODS#{userId}` | new: the identities linked onto the user (provider, subject, the email as the provider gave it, whether an unlink is unfinished) and a `version` every write is conditional on; during an erasure, `erasingMailboxes` |
 | `MAIL#{sha256(personKey)}` / `SEND#{day}`, `RESET#{day}`, `DELIVERY#…` | the mail budget, counted per UTC day: `SEND#` allows 8 signup, resend, attribute-verification and authentication codes, `RESET#` allows 3 password reset codes, so reset requests cannot use up the others; `DELIVERY#` marks a message already counted (Leyline keeps these in its settings table; the library takes the table name as configuration) |
 
 `METHODS#{userId}` exists because nothing else holds what listing and
@@ -115,6 +115,11 @@ user to their bindings. A user without the row (every Leyline account at
 adoption) gets one, built from the pool, when first listed, linked or
 unlinked; addresses are null until that identity next signs in or is linked.
 The inbound trigger writes it only when it links or sees a different address.
+A link writes a new `PROVIDER#` binding in one transaction with the identity's
+place on the list, and the backfill writes a user's list before their bindings,
+so every binding the library writes can be found from its user, even when the
+link stops before the pool call. (A mark written first and cleared later would
+not do: an unlink or an erasure could drop it between the two writes.)
 Code older than the row never reads this key, so rolling back past it is safe.
 (A `LINK#` challenge written with `provider` does not decode in older code, so
 one in progress during a rollback has to be started again.)
@@ -237,15 +242,15 @@ the user; the library never does.
 | Step | Who | Does |
 |---|---|---|
 | 1 | product | `AdminDisableUser` (recommended), so that nothing signs in or links meanwhile |
-| 2 | `plan_erasure(user)` | reads the `METHODS#` row, the pool user's `identities` and the mailbox's row; records in the directory what only the pool knows: each identity on the list, and `userId` on a mailbox row the pool shows to be this user's |
+| 2 | `plan_erasure(user)` | reads the `METHODS#` row, the pool user's `identities` and the mailbox's row; records in the directory what only the pool knows: each identity on the list, the pool's address (`erasingMailboxes`) when it reaches another mailbox than the caller's, and `userId` on a mailbox row the pool shows to be this user's |
 | 3 | product | `AdminDeleteUser` |
 | 4 | `erase_user(plan)` | for each identity, deletes the `PROVIDER#` row; deletes the `EMAIL#` row; then deletes `METHODS#` |
 
 - **Only this user's rows.** Each delete is conditional on the row naming this
   `userId`. A row someone else holds is left and counted.
 - **Order is enforced.** `erase_user` refuses, deleting nothing, while the pool
-  holds a user with that username and `sub`. Planned after the deletion, a
-  binding the list does not name cannot be found, and an unbound mailbox row is
+  holds a user with that username and `sub`. Planned after the deletion, an
+  identity only the pool listed cannot be found, and an unbound mailbox row is
   left.
 - **Repeats.** After any failure, run the steps again from the start, treating a
   user already gone as deleted. The product keeps the user's id, username and
@@ -254,13 +259,43 @@ the user; the library never does.
 - The report counts rows removed and left. It holds no address.
 - Both steps refuse until the directory is open.
 - `LINK#` challenges and mail budget rows expire on their own.
-- Not found: a `PROVIDER#` row whose link stopped between the binding and the
-  pool call, never reached the list and was never retried. Neither the pool nor
-  a keyed read leads to it; an operator removes it.
 
 The worker needs `AdminGetUser` on the pool and `GetItem`, `PutItem`,
 `UpdateItem` and `DeleteItem` on the table (`grantErasure` in the CDK package),
 and its own `AdminDisableUser` and `AdminDeleteUser`.
+
+### Rows no keyed read leads to
+
+Two kinds of row are outside erasure's reach, and an operator removes them by
+searching the table for the deleted user's `sub`:
+
+- a `PROVIDER#` row that code older than the one-transaction binding wrote (a
+  Leyline row, say) for a link that never reached the pool or a list;
+- an `EMAIL#` row under an address that was changed in the pool without the
+  directory, when the product no longer holds the old one.
+
+```bash
+SUB=…  # the deleted user's sub
+VALUES='{":binding":{"S":"PROVIDER#"},":user":{"S":"\"user_id\":\"'$SUB'\""},":sub":{"S":"'$SUB'"}}'
+aws dynamodb scan --table-name "$IDENTITIES_TABLE" \
+  --filter-expression '(begins_with(identityKey, :binding) AND contains(#record, :user)) OR userId = :sub' \
+  --expression-attribute-names '{"#record":"record"}' \
+  --expression-attribute-values "$VALUES" \
+  --projection-expression identityKey
+```
+
+Check that the pool no longer holds the user, then delete each key found, on the
+condition that it still names them:
+
+```bash
+aws dynamodb delete-item --table-name "$IDENTITIES_TABLE" \
+  --key '{"identityKey":{"S":"PROVIDER#Google#…"}}' \
+  --condition-expression 'contains(#record, :user)' \
+  --expression-attribute-names '{"#record":"record"}' \
+  --expression-attribute-values '{":user":{"S":"\"user_id\":\"…\""}}'
+```
+
+For an `EMAIL#` key, the condition is `userId = :sub`, with `:sub` the value.
 
 ## Backfilling an existing pool
 
@@ -270,7 +305,9 @@ mailboxes look unclaimed. `cardea_cognito::backfill`, run by an operator as
 them. The rules come from Leyline's `backfill_identity_directory.py`, extended
 to pools that already link providers.
 
-For every user the pool lists:
+For every user the pool lists (`ListUsers` also shows a linked identity's own
+profile, named `{provider}_{subject}`, beside the user it is linked to; that is
+the same person, and is passed over):
 
 | Row | Written as |
 |---|---|
@@ -281,9 +318,12 @@ For every user the pool lists:
 
 - **Dry run by default.** `--apply` writes; `--activate` needs `--apply`.
 - **Never overwrites.** Each write is conditional on the key being free. A row
-  already there that is the user's counts as covered.
+  already there that is the user's counts as covered; a mailbox row only if its
+  username is the pool's or the user's address, which is what a sign-in can
+  follow. A user's list is written before their bindings.
 - **Conflicts are reported, not resolved:** two users on one person key (neither
-  gets any row), a mailbox row that is another's (the user gets no row), a
+  gets any row), a mailbox row that is another's or under a username the pool no
+  longer answers to (the user gets no row), a
   subject bound elsewhere, a binding with an outdated username or address, a
   lapsing claim on a user past confirmation, and a user or row that cannot be
   read.
@@ -300,6 +340,15 @@ For every user the pool lists:
 Deploy the Cardea triggers before the backfill. Until the marker is written they
 refuse new accounts, so none appears outside the directory, and provider
 sign-ins too, so the window should be short.
+
+`ListUsers` is eventually consistent, so both passes can miss an account made
+moments before the triggers took over, and that person would then be refused
+once the directory is open. Cognito publishes no bound for the delay: wait some
+minutes after the deployment before activating, and after activating run the
+backfill once more without flags, which reports any user without rows. To repair
+one, delete `SYSTEM#READY` and run `--apply --activate`. The tool does not write
+to an open directory itself: a stale listing could then restore an identity just
+unlinked, or the rows of a user just deleted.
 
 ## Web package
 
