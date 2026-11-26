@@ -207,15 +207,18 @@ wires the same settings itself; `packages/cdk/README.md` lists them.
    library; behaviour and the table are unchanged, and Leyline's existing
    identity tests pass unchanged. Then the console uses the web package and
    gains a sign-in methods page.
-2. **Pigeon.** Gains a directory table, the triggers and Google and Apple.
-   No existing linking to migrate. Its `custom:tenantId` claim becomes its
+2. **Pigeon.** Gets a new pool built with the construct (decided
+   2026-11-26). The current pool marks `email` immutable, which no provider
+   mapping allows and Cognito cannot change on an existing pool. Its users
+   move to the new pool, then the old pool is removed. Pigeon also gains a
+   directory table, the triggers, Google and Apple. It has no existing
+   linking to migrate. Its `custom:tenantId` claim becomes its
    `token_claims` hook.
 3. **Yoru.** Google-only Cognito users (`google_…`) must become native users
    with Google linked. Doing that gives them a new Cognito `sub`, and Yoru's
-   `userId` is the `sub`. Plan: count them first; then either move each
-   user's data to the new id, or store the old id as the directory row's
-   `userId` and have `PreTokenGeneration` put it in a `custom:userId` claim
-   that Yoru reads instead of `sub`. Decide after the count.
+   `userId` is the `sub`. Decided 2026-11-26: the only such account is the
+   owner's, so a one-off step at adoption moves that account's data to its
+   new id. No `custom:userId` claim and no general migration tool.
 
 ## Not in v1
 
@@ -224,14 +227,12 @@ on every device (token revocation), SAML.
 
 ## Open questions
 
-- **Q1. Visibility.** The repo is private. Yoru and Pigeon are in other
-  organisations, so each consumer's CI needs a token to fetch a private git
-  dependency and private npm packages. A public repo (like `crucible` and
-  `tabulary`) needs none. Owner's call.
-- **Q2. Apple account.** An Apple Developer account, a Services ID, a Sign in
+- **Visibility (decided 2026-11-26): private.** Yoru and Pigeon live in
+  other organisations, so their CI fetches the Rust crates and npm packages
+  with a token. Set that up when each product adopts the library.
+- **Apple account (owner to set up).** An Apple Developer account, a Services ID, a Sign in
   with Apple key, and each pool's `/oauth2/idpresponse` registered with
   Apple, before Apple can be tested live.
-- **Q3. Yoru's migration**, after the count (Adoption, step 3).
 
 ## Lanes
 
