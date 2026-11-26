@@ -1,6 +1,6 @@
-# Identity: design
+# Cardea: design
 
-One library for Cognito sign-in and account linking, shared by Leyline,
+Cardea is one library for Cognito sign-in and account linking, shared by Leyline,
 Yoru and Pigeon. It is Leyline's identity code (`leyline/auth/src/identity`,
 `leyline/auth/src/bin/provision.rs`, `leyline-console/src/lib/auth.tsx`),
 taken out of Leyline, generalised from Google to any provider, and finished.
@@ -35,13 +35,13 @@ What this rules out, and what each product does wrong today:
 
 ```
 crates/
-  identity-core      pure rules: person key, providers, resolution, errors. No AWS.
-  identity-cognito   the directory table, Cognito admin calls, the trigger handler,
+  cardea-core      pure rules: person key, providers, resolution, errors. No AWS.
+  cardea-cognito   the directory table, Cognito admin calls, the trigger handler,
                      link challenges, sign-in methods, the mail budget.
 packages/
-  web                @operation-leyline/identity-web: browser sign-in, sessions,
+  web                @operation-leyline/cardea-web: browser sign-in, sessions,
                      provider sign-in, link-a-method hooks (React optional).
-  cdk                @operation-leyline/identity-cdk: the pool, providers, clients,
+  cdk                @operation-leyline/cardea-cdk: the pool, providers, clients,
                      domains, table and trigger wiring as one construct.
 ```
 
@@ -75,7 +75,7 @@ person holds it. Every other verified email only proves that the person
 held the mailbox once; the person must prove the account is theirs by
 signing in to it first.
 
-`identity-core` exposes `Provider` (an enum: `Google`, `Apple`; adding one
+`cardea-core` exposes `Provider` (an enum: `Google`, `Apple`; adding one
 is a variant plus its row) and `ProviderIdentity { provider, subject,
 email, authoritative }`, built from verified claims by the provider's rule.
 `resolve_google` becomes `resolve(directory, identity, authenticated_user)`
@@ -121,7 +121,7 @@ pub trait Product: Send + Sync {
     fn mail(&self) -> Option<&dyn MailDelivery> { None }
 }
 
-fn main() { identity_cognito::triggers::run(MyProduct::from_env()) }
+fn main() { cardea_cognito::triggers::run(MyProduct::from_env()) }
 ```
 
 | Trigger | Library does |
@@ -227,7 +227,7 @@ on every device (token revocation), SAML.
 
 | Lane | Scope | Depends on |
 |---|---|---|
-| A | `identity-core` and `identity-cognito`: person key, providers, resolution, directory, trigger handler with `Product`, mail budget, moved from Leyline with its tests | — |
+| A | `cardea-core` and `cardea-cognito`: person key, providers, resolution, directory, trigger handler with `Product`, mail budget, moved from Leyline with its tests | — |
 | B | link challenges for any provider, Apple proof verification, sign-in methods, unlink, `passwordSet` | A |
 | C | `packages/web` | — (uses the operations' shapes above) |
 | D | `packages/cdk` and CI | — |
