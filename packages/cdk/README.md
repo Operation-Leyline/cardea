@@ -65,7 +65,8 @@ from the construct: CDK reports a cyclic reference. Give them values their own
 stack already knows:
 
 ```ts
-// In the functions' stack. A separate sender function gets the same values.
+// In the functions' stack. A separate sender function needs the key's ARN only,
+// besides its mail budget table.
 const emailKey = new kms.Key(this, 'EmailCodeKey', { enableKeyRotation: true });
 triggers.addEnvironment('IDENTITIES_TABLE', 'example-identities');
 triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', emailKey.keyArn);
@@ -154,30 +155,24 @@ put it in its own `iam.Policy` attached to the function's role.
 ### A separate email sender
 
 When `customEmailSender.handler` is not `triggers.handler`, the construct grants
-that function `kms:Decrypt` on the email key, `dynamodb:GetItem` on the
-directory table (and decrypt on the table's own key, if it has one) and
-`cognito-idp:AdminGetUser` on this pool, in a policy the function does not
-depend on.
+that function `kms:Decrypt` on the email key, in a policy the function does not
+depend on, and nothing else. The Cardea sender reads neither the directory nor
+the pool.
 
 | Environment variable | Set by |
 |---|---|
-| `IDENTITIES_TABLE` | the construct, for a `lambda.Function` in the pool's stack; otherwise you |
 | `COGNITO_EMAIL_KEY_ARN` | the construct, for a `lambda.Function` in the pool's stack; otherwise you |
 | `MAIL_BUDGET_TABLE` | you: the construct creates no budget table |
 
-A function the construct configures serves one directory table and one key, so
-two pools in a stack cannot share it unless they share both; synth refuses.
+A function the construct configures serves one key, so two pools in a stack
+cannot share it unless they share the key; synth refuses.
 
-An imported function (`IFunction`) must already have all three, and a function
+An imported function (`IFunction`) must already have both, and a function
 in another stack must get them from values its own stack knows, as
 [above](#trigger-functions-in-another-stack). Either way the budget table
 (partition key `partitionKey`, sort key `sortKey`, TTL `expiresAt`) and
 `PutItem` and `UpdateItem` on it are yours; the same is true when the trigger
 function sends the mail.
-
-Without the table name, the grant or the pool lookup, the Cardea sender refuses
-attribute verification codes and still sends sign-up and reset mail, so check a
-deployment with an attribute verification code too.
 
 ## Changing email
 
@@ -533,8 +528,8 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   function does not depend on (this replaces `ListUsers` on `*`).
 - Read and write on the directory table.
 - `kms:Decrypt` on the email key for the sender. A sender function of its own
-  also needs `dynamodb:GetItem` on the directory table, `AdminGetUser` on this
-  pool, and the environment in
+  needs none of the Cognito or directory permissions above: only this one,
+  `PutItem` and `UpdateItem` on its mail budget table, and the environment in
   [A separate email sender](#a-separate-email-sender).
 
 **Directory table**

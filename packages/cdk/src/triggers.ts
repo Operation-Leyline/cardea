@@ -91,8 +91,9 @@ export function wireInboundFederation(userPool: cognito.UserPool, handler: lambd
 /**
  * What the functions may do: the handler finds, creates and links users in
  * this pool and reads and writes the directory; the email sender decrypts
- * codes, and one that is a function of its own may also look a user and a
- * directory row up.
+ * codes. A sender that is a function of its own gets nothing else here: it
+ * judges each message from the event alone, and its budget table is the
+ * product's to grant.
  *
  * The pool names the functions as triggers, so a function that depends on the
  * pool closes a loop CloudFormation refuses to deploy. A function depends on
@@ -130,40 +131,31 @@ export function grantTriggers(
     policy.addStatements(decrypt);
     return;
   }
-  // Reading one user and one row is what the sender needs to judge an
-  // attribute verification code; without it, it refuses every such code.
-  const senderPolicy = new iam.Policy(scope, 'EmailSenderPolicy', {
+  new iam.Policy(scope, 'EmailSenderPolicy', {
     roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
-    statements: [
-      decrypt,
-      new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [directory.tableArn] }),
-      new iam.PolicyStatement({ actions: ['cognito-idp:AdminGetUser'], resources: [userPool.userPoolArn] }),
-    ],
+    statements: [decrypt],
   });
-  directory.encryptionKey?.grantDecrypt(senderPolicy);
-  setSenderEnvironment(scope, directory, sender);
+  setSenderEnvironment(scope, sender);
 }
 
-/** What each sender function has been told, so a second pool cannot quietly replace it. */
-const senderSettings = new WeakMap<lambda.Function, string>();
+/** The key each sender function has been told of, so a second pool cannot quietly replace it. */
+const senderKeys = new WeakMap<lambda.Function, string>();
 
 /**
- * Tell a sender function defined in this stack where the directory and the key
- * are. A function in another stack cannot be handed these from here without a
- * stack cycle, and an imported one cannot be handed anything, so the product
+ * Tell a sender function defined in this stack which key opens its codes. A
+ * function in another stack cannot be handed it from here without a stack
+ * cycle, and an imported one cannot be handed anything, so the product
  * configures those itself.
  */
-function setSenderEnvironment(scope: Construct, directory: dynamodb.ITable, { handler, key }: EmailSender): void {
+function setSenderEnvironment(scope: Construct, { handler, key }: EmailSender): void {
   if (!(handler instanceof lambda.Function) || Stack.of(handler) !== Stack.of(scope)) return;
-  const settings = JSON.stringify([directory.tableName, key.keyArn]);
-  if ((senderSettings.get(handler) ?? settings) !== settings) {
+  if ((senderKeys.get(handler) ?? key.keyArn) !== key.keyArn) {
     throw new Error(
-      'customEmailSender.handler already serves a pool with another directory table or email key; ' +
+      'customEmailSender.handler already serves a pool with another email key; ' +
         'give each such pool a sender function of its own',
     );
   }
-  senderSettings.set(handler, settings);
-  handler.addEnvironment('IDENTITIES_TABLE', directory.tableName);
+  senderKeys.set(handler, key.keyArn);
   handler.addEnvironment('COGNITO_EMAIL_KEY_ARN', key.keyArn);
 }
 
