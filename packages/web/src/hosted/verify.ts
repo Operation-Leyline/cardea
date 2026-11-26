@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { createRemoteJWKSet, errors, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { ResolvedConfig } from "../config.js";
 import { CardeaError } from "../errors.js";
 
@@ -13,6 +13,19 @@ export type Verifier = (
   tokens: { idToken: string; accessToken: string },
   expected: { nonce?: string; subject?: string; allowExpired?: boolean; emailOptional?: boolean },
 ) => Promise<string>;
+
+/**
+ * Whether verification failed because the pool's keys could not be fetched,
+ * which says nothing about the tokens.
+ */
+export function keysUnavailable(error: unknown): boolean {
+  // `fetch` rejects with a TypeError; jose uses its generic error for a bad key set response.
+  return (
+    error instanceof TypeError ||
+    error instanceof errors.JWKSTimeout ||
+    (error instanceof errors.JOSEError && error.code === errors.JOSEError.code)
+  );
+}
 
 export function createVerifier(config: ResolvedConfig): Verifier {
   let keys: JWTVerifyGetKey | undefined;

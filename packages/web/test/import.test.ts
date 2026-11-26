@@ -7,7 +7,7 @@ import {
   type ClientOptions,
   type SessionEvent,
 } from "../src/index.js";
-import { authenticationResult, CognitoFailure, CONFIG, deferred, GENERATION_KEY, installFakeCognito, ISSUER, issueTokens, otherTabWrites, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
+import { authenticationResult, CONFIG, deferred, GENERATION_KEY, installFakeCognito, ISSUER, issueTokens, otherTabWrites, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
 
 const SDK = `CognitoIdentityServiceProvider.${CONFIG.clientId}`;
 const GOOGLE = `leyline.google.session.${CONFIG.clientId}.${ISSUER}`;
@@ -62,16 +62,46 @@ function setup(importSession: CardeaConfig["importSession"], options: ClientOpti
 const keys = () => Object.keys(localStorage).filter((key) => key !== GENERATION_KEY).sort();
 const saved = () => JSON.parse(localStorage.getItem(SESSION_KEY)!);
 
-/** Answers a refresh from either endpoint. */
+/** Replaces both refresh endpoints. Tokens are put in the shape each one uses. */
 function refreshWith(cognito: ReturnType<typeof installFakeCognito>, answer: () => Promise<Response>) {
   cognito.onToken(answer);
   cognito.operations.InitiateAuth = async () => {
     const response = await answer();
-    if (!response.ok) return new CognitoFailure("NotAuthorizedException");
-    const body = await response.json();
-    return authenticationResult(body, false);
+    const body = await response.clone().json().catch(() => null);
+    return body?.id_token ? authenticationResult(body, false) : response;
   };
 }
+
+const failure = (status: number, body: Record<string, unknown>) => async () => Response.json(body, { status });
+const unreachable = async (): Promise<Response> => {
+  throw new TypeError("Failed to fetch");
+};
+
+/** Ways a refresh is refused for good. */
+const REFUSALS: Record<"password" | "Google", [string, () => Promise<Response>][]> = {
+  password: [
+    ["NotAuthorizedException", failure(400, { __type: "NotAuthorizedException" })],
+    ["UserNotFoundException", failure(400, { __type: "UserNotFoundException" })],
+  ],
+  Google: [["invalid_grant", failure(400, { error: "invalid_grant" })]],
+};
+
+/** Ways a refresh ends without a verdict. */
+const OUTAGES = [
+  ["is offline", unreachable],
+  ["meets a 500", failure(500, { __type: "InternalErrorException", error: "server_error" })],
+  ["meets a 503 page", async () => new Response("<h1>Unavailable</h1>", { status: 503 })],
+  ["meets a 500 naming invalid_grant", failure(500, { __type: "InternalErrorException", error: "invalid_grant" })],
+  ["is throttled", failure(429, { __type: "TooManyRequestsException", error: "slow_down" })],
+  [
+    "times out",
+    async (): Promise<Response> => {
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    },
+  ],
+  ["returns another account", async () => Response.json(await issueTokens({ subject: "mallory" }))],
+  ["returns tokens the pool did not sign", async () => Response.json(await issueTokens({ foreignKey: true }))],
+] as const;
 
 const refreshRequests = (cognito: ReturnType<typeof installFakeCognito>) =>
   cognito.calls.length + cognito.tokenRequests.length;
@@ -112,20 +142,81 @@ describe.each(Object.entries(SOURCES))("importing from %s", (_name, { source, sa
     expect(keys()).toEqual([SESSION_KEY]);
   });
 
-  it.each([
-    ["is refused", async () => Response.json({ error: "invalid_grant" }, { status: 400 })],
-    ["returns another account", async () => Response.json(await issueTokens({ subject: "mallory" }))],
-    ["returns tokens the pool did not sign", async () => Response.json(await issueTokens({ foreignKey: true }))],
-  ])("signs out and removes the old keys when the refresh %s", async (_case, answer) => {
+  it.each(REFUSALS[method])("signs out and removes the old keys when the refresh is refused: %s", async (_code, answer) => {
     const cognito = installFakeCognito();
     await save(EXPIRED);
     refreshWith(cognito, answer);
     const { client, events } = setup([source]);
-    // Only a refusal is retried; faking time otherwise would trip the request deadline.
-    await (_case === "is refused" ? throughBackoff(client.start()) : client.start());
-    expect(client.getState()).toMatchObject({ status: "signedOut", session: null });
+    // The SDK retries a refusal.
+    await expect(method === "password" ? throughBackoff(client.start()) : client.start()).resolves.toEqual({});
+    expect(client.getState()).toMatchObject({ status: "signedOut", session: null, error: null });
     expect(keys()).toEqual([]);
     expect(events).toEqual([]);
+  });
+
+  /** After an outage: nothing imported, nothing removed, and the next page load succeeds. */
+  async function expectAnotherTry(
+    first: ReturnType<typeof setup>,
+    before: string[],
+    started: Promise<unknown>,
+  ) {
+    await expect(started).resolves.toMatchObject({ error: { code: "refresh-failed" } });
+    expect(first.client.getState()).toMatchObject({ status: "signedOut", error: { code: "refresh-failed" } });
+    await expect(first.client.getIdToken()).resolves.toBeNull();
+    expect(keys()).toEqual(before);
+    expect(first.events).toEqual([]);
+
+    vi.useRealTimers();
+    const online = installFakeCognito();
+    const next = setup([source]);
+    await expect(next.client.start()).resolves.toEqual({});
+    expect(next.client.getState()).toMatchObject({ status: "signedIn", session: { subject: "ada", method } });
+    expect(keys()).toEqual([SESSION_KEY]);
+    expect(refreshRequests(online)).toBe(1);
+  }
+
+  it.each(OUTAGES)("keeps the old keys for the next load when the refresh %s", async (name, answer) => {
+    const cognito = installFakeCognito();
+    await save(EXPIRED);
+    const before = keys();
+    refreshWith(cognito, answer);
+    const first = setup([source]);
+    // The SDK retries a request that fails outright; a response it can parse as success it does not.
+    const retried = method === "password" && !name.startsWith("returns");
+    const started = first.client.start();
+    await expectAnotherTry(first, before, retried ? throughBackoff(started) : started);
+  });
+
+  if (method === "password") {
+    // The password path has its own deadline; the token endpoint's is the browser's.
+    it("keeps the old keys when the refresh never answers", async () => {
+      const cognito = installFakeCognito();
+      await save(EXPIRED);
+      const before = keys();
+      cognito.operations.InitiateAuth = () => new Promise(() => {});
+      const first = setup([source]);
+      await expectAnotherTry(first, before, throughBackoff(first.client.start()));
+    });
+  }
+
+  it.each([
+    ["fresh", {}],
+    ["expired", EXPIRED],
+  ])("keeps the old keys for the next load when the browser is offline and the tokens are %s", async (_age, options) => {
+    const cognito = installFakeCognito();
+    await save(options);
+    const before = keys();
+    cognito.fetcher.mockImplementation(unreachable);
+    const first = setup([source]);
+    await expect(first.client.start()).resolves.toMatchObject({ error: { code: "refresh-failed" } });
+    expect(first.client.getState().status).toBe("signedOut");
+    expect(keys()).toEqual(before);
+
+    const online = installFakeCognito();
+    const next = setup([source]);
+    await next.client.start();
+    expect(next.client.getState().status).toBe("signedIn");
+    expect(refreshRequests(online)).toBe(options === EXPIRED ? 1 : 0);
   });
 
   it.each([
@@ -248,6 +339,23 @@ describe("which old session is taken", () => {
     expect(client.getState().session).toMatchObject({ subject: "grace", method: "Google" });
     expect(keys().filter((key) => !key.includes("other-client"))).toEqual([SESSION_KEY]);
     expect(keys().filter((key) => key.includes("other-client"))).toHaveLength(5);
+  });
+
+  it.each([
+    ["a 500", async () => new Response("down", { status: 500 })],
+    ["an unreadable body", async () => new Response("<html>", { status: 200 })],
+    ["a timeout", async (): Promise<Response> => Promise.reject(new DOMException("timed out", "TimeoutError"))],
+  ])("does not take a later source while the signing keys answer with %s", async (_name, answer) => {
+    const cognito = installFakeCognito();
+    await saveHosted(GOOGLE);
+    await saveSdk({ subject: "grace" });
+    const before = keys();
+    // Only the first request for the keys fails.
+    cognito.fetcher.mockImplementationOnce(answer);
+    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    await expect(client.start()).resolves.toMatchObject({ error: { code: "refresh-failed" } });
+    expect(client.getState().status).toBe("signedOut");
+    expect(keys()).toEqual(before);
   });
 
   it("moves on from a source that does not verify", async () => {
@@ -373,12 +481,21 @@ describe("an old session never comes back", () => {
     const { client, events } = setup(sources);
     const started = client.start();
     await asked.promise;
-    const finish = async () => {
-      answer.resolve(authenticationResult(await issueTokens(), false));
+    const finish = async (subject = "ada") => {
+      answer.resolve(authenticationResult(await issueTokens({ subject }), false));
       await started;
     };
     return { cognito, client, events, finish };
   }
+
+  it("reports nothing when a failed refresh ends after a sign-out removed the old session", async () => {
+    const { client, finish } = await slowImport();
+    client.signOut();
+    // An answer for another account is a failure, not a refusal.
+    await finish("mallory");
+    expect(client.getState()).toMatchObject({ status: "signedOut", error: null });
+    expect(keys()).toEqual([]);
+  });
 
   it("is not saved after a sign-out during the import", async () => {
     const { client, finish } = await slowImport();

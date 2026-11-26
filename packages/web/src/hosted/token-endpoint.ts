@@ -24,7 +24,8 @@ export async function requestTokens(config: ResolvedConfig, body: Record<string,
   });
   const result = (await response.json().catch(() => null)) as Record<string, unknown> | null;
   if (!response.ok) {
-    if (result?.error === "invalid_grant") throw new RefreshExpired();
+    // A server error refuses nothing, whatever its body says.
+    if (response.status < 500 && result?.error === "invalid_grant") throw new RefreshExpired();
     throw new CardeaError("token-exchange-failed");
   }
   const { id_token: idToken, access_token: accessToken, refresh_token: refreshToken } = result ?? {};

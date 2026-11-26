@@ -130,8 +130,14 @@ wait for the result. Nothing is read on a provider callback.
   (signature, purpose, subject; there is no nonce). Anything else is ignored and
   left in place.
 - An expired session with a refresh token is refreshed at once.
-- If that refresh fails, **for any reason, including being offline**, the person
-  is signed out and the old keys are removed.
+- If the refresh is **refused** (`invalid_grant`, `NotAuthorizedException` or
+  `UserNotFoundException`), the person is signed out and the old keys are
+  removed.
+- If it cannot be completed (offline, a timeout, a server error, unreachable
+  signing keys, or any other failure), nothing is imported and the old keys
+  stay, so the next page load tries again. The person is signed out for this
+  one, and `start` and `useSession().error` report `refresh-failed`. Signing in
+  or out meanwhile removes the old keys.
 - Old keys are removed only after the new session is saved. From then on, every
   sign-in and sign-out removes them, so an old session cannot come back.
 - A Google session also needs an email claim. A password session does not.

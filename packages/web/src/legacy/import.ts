@@ -1,7 +1,8 @@
 import type { ResolvedConfig } from "../config.js";
-import type { Verifier } from "../hosted/verify.js";
+import { CardeaError } from "../errors.js";
+import { keysUnavailable, type Verifier } from "../hosted/verify.js";
 import { isFresh, justIssued, usernameOf, type SessionMethod, type StoredSession } from "../session/record.js";
-import type { TokenSource } from "../session/refresh.js";
+import { RefreshExpired, type TokenSource } from "../session/refresh.js";
 import type { LegacySession, LegacySessionSource } from "./source.js";
 
 /** Removes every configured source's keys, so an old session can never come back. */
@@ -39,9 +40,11 @@ export interface ImportDependencies {
  *
  * Nothing is saved if the old session disappears while this runs.
  *
- * A source that does not verify is left where it is. A refresh that fails ends
- * the old sign-in: every old key is removed and nothing is saved. Otherwise old
- * keys go only after the new session is saved.
+ * A source that does not verify is left where it is. A refused refresh ends the
+ * old sign-in: every old key is removed and nothing is saved. Any other failure
+ * to reach a verdict, such as being offline or a server error, imports nothing,
+ * keeps every key for the next start-up and throws `refresh-failed`. Otherwise
+ * old keys go only after the new session is saved.
  */
 export async function importLegacySession(dependencies: ImportDependencies): Promise<void> {
   const { config, storage, verify, tokenSource, save } = dependencies;
@@ -55,23 +58,30 @@ export async function importLegacySession(dependencies: ImportDependencies): Pro
     let record: StoredSession;
     let subject: string;
     const checks = { allowExpired: true, emailOptional: found.method === "password" };
+    // Gone means signed out, or already taken over by another tab, while this one waited.
+    const gone = () => readFrom(source, config, storage)?.refreshToken !== found.refreshToken;
+    /** Gives up for now, without trying a later source in place of this one. */
+    const postpone = () => {
+      if (!gone()) throw new CardeaError("refresh-failed");
+    };
     try {
       subject = await verify(tokens, { ...checks, ...(recorded ? { subject: recorded } : {}) });
       record = { version: 1, ...tokens, username: usernameOf(tokens.idToken) ?? username ?? subject };
-    } catch {
+    } catch (error) {
+      if (keysUnavailable(error)) return postpone();
       continue;
     }
     if (!isFresh(record)) {
       try {
         record = justIssued({ ...record, ...(await tokenSource(record.method)(record)) });
         await verify(record, { ...checks, subject });
-      } catch {
+      } catch (error) {
+        if (!(error instanceof RefreshExpired)) return postpone();
         forgetLegacySessions(config, storage);
         return;
       }
     }
-    // Gone means signed out, or already taken over by another tab, while this one waited.
-    if (readFrom(source, config, storage)?.refreshToken !== found.refreshToken) return;
+    if (gone()) return;
     save(record);
     return;
   }

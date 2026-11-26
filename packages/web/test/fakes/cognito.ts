@@ -132,6 +132,7 @@ export function installFakeCognito() {
     const body = JSON.parse(String(init!.body));
     calls.push({ operation, body });
     const result = await handler(body);
+    if (result instanceof Response) return result;
     if (result instanceof CognitoFailure) {
       return Response.json({ __type: result.code, message: result.code }, { status: 400 });
     }
