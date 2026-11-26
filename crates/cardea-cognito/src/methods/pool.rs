@@ -8,11 +8,25 @@ use super::row::Identity;
 use crate::directory::{AwsDirectory, attribute};
 
 impl AwsDirectory {
-    /// The identities the pool links onto `user`, refusing a user the pool no
-    /// longer agrees with. Providers this library does not know are left out:
-    /// its triggers refuse their sign-ins, so they are no way in.
+    /// The identities the pool links onto `user`. Refused with
+    /// [`Error::Conflict`] unless the pool's user of that name is enabled,
+    /// confirmed and has the caller's id. A verified address is not asked for:
+    /// an account an operator made may sign in without one, and may see and
+    /// remove its methods. Linking still requires it.
+    ///
+    /// Providers this library does not know are left out: its triggers refuse
+    /// their sign-ins, so they are no way in.
     pub(super) async fn pool_identities(&self, user: &User) -> Result<Vec<Identity>, Error> {
-        let raw = self.same_user(user).await?;
+        let raw = self
+            .get_user(&user.username)
+            .await?
+            .ok_or(Error::Conflict)?;
+        if !raw.enabled()
+            || raw.user_status().map(|status| status.as_str()) != Some("CONFIRMED")
+            || attribute(&raw, "sub") != Some(user.user_id.as_str())
+        {
+            return Err(Error::Conflict);
+        }
         let Some(value) = attribute(&raw, "identities") else {
             return Ok(Vec::new());
         };

@@ -210,7 +210,8 @@ change).
 
 An unlink first marks the identities on the `METHODS#` row, conditional on the
 version it counted the remaining methods against, so two unlinks cannot take
-the last two. Then it calls `AdminDisableProviderForUser`, deletes the binding
+the last two. What remains must be a chosen password, or another identity the
+pool links and the directory binds to this account. Then it calls `AdminDisableProviderForUser`, deletes the binding
 and drops the entry; a repeat finds the marks and finishes. A marked identity
 is neither linked nor signed in with until that is done.
 

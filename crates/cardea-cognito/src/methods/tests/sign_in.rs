@@ -79,6 +79,38 @@ async fn a_sign_in_fills_in_a_missing_address() {
     );
 }
 
+/// A Leyline account with two links and no list: its first sign-in starts the
+/// list with both.
+#[tokio::test]
+async fn a_first_sign_in_lists_every_identity_the_pool_links() {
+    let f = fixture().await;
+    let alice = f.account("alice", "Cognito").await;
+    for (method, subject) in [(GOOGLE, "google-1"), (APPLE, "apple-1")] {
+        f.pool_link("alice", method, subject);
+        f.directory
+            .claim_provider(method, subject, &alice)
+            .await
+            .unwrap();
+    }
+
+    f.directory
+        .inbound(inbound(GOOGLE, "google-1", "Alice@Example.com"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        stored(&f, &alice).await.unwrap(),
+        (
+            1,
+            concat!(
+                r#"[{"provider":"Google","subject":"google-1","email":"Alice@Example.com"},"#,
+                r#"{"provider":"SignInWithApple","subject":"apple-1"}]"#
+            )
+            .to_owned()
+        )
+    );
+}
+
 #[tokio::test]
 async fn an_unlinked_identity_no_longer_signs_in() {
     let f = fixture().await;

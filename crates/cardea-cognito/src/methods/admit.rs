@@ -30,7 +30,11 @@ impl AwsDirectory {
         for _ in 0..ATTEMPTS {
             let read = self.methods_row(user).await?;
             let version = read.as_ref().map_or(0, |row| row.version);
-            let mut next = read.unwrap_or_else(|| MethodsRow::empty(user));
+            let mut next = match read {
+                Some(row) => row,
+                // The first list holds what the pool already links, too.
+                None => self.first_list(user).await?,
+            };
             if next.is_removing(&identity) {
                 if !self.pool_identities(user).await?.contains(&identity) {
                     self.finish_removal(user, std::slice::from_ref(&identity))
@@ -53,6 +57,16 @@ impl AwsDirectory {
             }
         }
         Err(Error::Unavailable)
+    }
+
+    /// The list of a user who has none: the identities the pool links, their
+    /// addresses not yet seen.
+    async fn first_list(&self, user: &User) -> Result<MethodsRow, Error> {
+        let mut list = MethodsRow::empty(user);
+        for linked in self.pool_identities(user).await? {
+            list.entry(&linked);
+        }
+        Ok(list)
     }
 
     /// The directory as one provider proof or sign-in resolves against it:

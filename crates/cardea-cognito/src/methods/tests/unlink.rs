@@ -56,6 +56,58 @@ async fn without_a_password_one_provider_must_stay() {
     );
 }
 
+/// The pool links it, but a sign-in through it could be refused.
+#[tokio::test]
+async fn an_unbound_identity_does_not_count_as_a_method() {
+    let f = fixture().await;
+    let alice = f.passwordless("alice").await;
+    f.link(&alice, GOOGLE, "google-1").await;
+    f.pool_link("alice", APPLE, "apple-1");
+
+    assert_eq!(
+        unlink(&f, &alice, GOOGLE).await,
+        Err(OperationError::LastSignInMethod)
+    );
+
+    // Nor one bound to someone else.
+    let bob = f.account("bob", "Cognito").await;
+    f.directory
+        .claim_provider(APPLE, "apple-1", &bob)
+        .await
+        .unwrap();
+    assert_eq!(
+        unlink(&f, &alice, GOOGLE).await,
+        Err(OperationError::LastSignInMethod)
+    );
+    assert_eq!(f.pool.state().disables, 0);
+}
+
+/// An account an operator made, whose address nobody verified.
+#[tokio::test]
+async fn an_unverified_address_does_not_hide_or_hold_the_methods() {
+    let (f, alice) = password_and_google().await;
+    f.pool.state().users.get_mut("alice").unwrap().unverified = true;
+
+    assert_eq!(list(&f, &alice).await.len(), 2);
+    assert_eq!(unlink(&f, &alice, GOOGLE).await, Ok(()));
+    // Linking still needs the verified address.
+    assert_eq!(
+        f.try_link(&alice, GOOGLE, "google-1", &alice.email).await,
+        Err(OperationError::Identity(Error::LinkRequired))
+    );
+}
+
+#[tokio::test]
+async fn an_unconfirmed_user_changes_nothing() {
+    let (f, alice) = password_and_google().await;
+    f.pool.state().users.get_mut("alice").unwrap().status = "UNCONFIRMED";
+    assert_eq!(
+        unlink(&f, &alice, GOOGLE).await,
+        Err(OperationError::Identity(Error::Conflict))
+    );
+    assert_eq!(f.identities("alice").len(), 1);
+}
+
 /// Both removals read the list and the pool before either writes: the second
 /// write is refused, and counting again it finds nothing would be left.
 #[tokio::test]

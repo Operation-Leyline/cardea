@@ -27,6 +27,8 @@ pub(crate) struct Account {
     pub status: &'static str,
     /// `(providerName, subject)`.
     pub identities: Vec<(String, String)>,
+    /// Report `email_verified` as false.
+    pub unverified: bool,
 }
 
 #[derive(Default)]
@@ -71,6 +73,7 @@ impl Pool {
                 email: email.into(),
                 status,
                 identities: Vec::new(),
+                unverified: false,
             },
         );
     }
@@ -205,7 +208,7 @@ async fn answer(
                 let mut attributes = vec![
                     json!({"Name":"sub","Value":user.sub}),
                     json!({"Name":"email","Value":user.email}),
-                    json!({"Name":"email_verified","Value":"true"}),
+                    json!({"Name":"email_verified","Value":(!user.unverified).to_string()}),
                 ];
                 if !user.identities.is_empty() {
                     let identities: Vec<Value> = user
@@ -250,6 +253,7 @@ async fn answer(
                     email,
                     status: "FORCE_CHANGE_PASSWORD",
                     identities: Vec::new(),
+                    unverified: false,
                 },
             );
             ok

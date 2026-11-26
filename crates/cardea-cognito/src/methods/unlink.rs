@@ -27,7 +27,8 @@ use crate::{
 /// provider linked is a success, so a repeat after a timeout succeeds.
 ///
 /// Refused with [`OperationError::LastSignInMethod`] when no chosen password
-/// and no other linked identity would be left. The account and its data stay,
+/// and no other identity both linked in the pool and bound to this account
+/// would be left. The account and its data stay,
 /// and the provider identity may then be linked to another account. An
 /// identity whose address the provider owns (Gmail, an Apple mailbox) still
 /// signs in to the account of that mailbox, and doing so links it again.
@@ -71,10 +72,11 @@ impl AwsDirectory {
             let takes_a_method = linked
                 .iter()
                 .any(|i| i.provider == provider && !next.is_removing(i));
-            let another_remains = linked
-                .iter()
-                .any(|i| i.provider != provider && !next.is_removing(i));
-            if takes_a_method && !another_remains && self.password_method(user).await? != Some(true)
+            if takes_a_method
+                && self.password_method(user).await? != Some(true)
+                && !self
+                    .another_signs_in(user, provider, &linked, &next)
+                    .await?
             {
                 return Err(OperationError::LastSignInMethod);
             }
@@ -97,6 +99,28 @@ impl AwsDirectory {
             }
         }
         Err(Error::Unavailable.into())
+    }
+
+    /// Whether an identity of another provider would still sign `user` in:
+    /// the pool links it, no unlink of it is under way, and its binding names
+    /// `user`. A sign-in through an unbound identity can be refused, so such a
+    /// one is not counted on.
+    async fn another_signs_in(
+        &self,
+        user: &User,
+        removing: Provider,
+        linked: &[Identity],
+        list: &MethodsRow,
+    ) -> Result<bool, Error> {
+        for other in linked {
+            if other.provider != removing
+                && !list.is_removing(other)
+                && self.binds(other.provider, &other.subject, user).await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Steps 3 and 4, for identities the pool no longer links onto `user`.

@@ -2,8 +2,10 @@
 
 use std::sync::{
     Mutex as SyncMutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+
+use tokio::sync::Notify;
 
 use super::*;
 
@@ -94,6 +96,95 @@ async fn a_known_kid_is_refetched_after_the_lifetime() {
     advance(&now, TTL);
     assert!(keys.key("a").await.unwrap().is_some());
     assert_eq!(fetches(&fetcher), 2);
+}
+
+/// Serves one key, unless it is told to be down; a request may be held.
+#[derive(Default)]
+struct Flaky {
+    down: AtomicBool,
+    hold: AtomicBool,
+    held: Notify,
+    release: Notify,
+    fetches: AtomicUsize,
+}
+
+#[async_trait]
+impl KeyFetcher for Flaky {
+    async fn fetch(&self, _url: &str) -> Result<Vec<u8>, KeyFetchError> {
+        self.fetches.fetch_add(1, Ordering::SeqCst);
+        if self.hold.load(Ordering::SeqCst) {
+            self.held.notify_one();
+            self.release.notified().await;
+        }
+        if self.down.load(Ordering::SeqCst) {
+            return Err(KeyFetchError::TooLarge);
+        }
+        let key = serde_json::json!({"kid": "a", "kty": "RSA", "n": "AQAB", "e": "AQAB"});
+        Ok(serde_json::json!({"keys": [key]}).to_string().into_bytes())
+    }
+}
+
+fn flaky() -> (Arc<Flaky>, Arc<Keys>, Arc<SyncMutex<Instant>>) {
+    let fetcher = Arc::new(Flaky::default());
+    let now = Arc::new(SyncMutex::new(Instant::now()));
+    let clock = Arc::clone(&now);
+    let mut keys = Keys::new("https://issuer.test/jwks", fetcher.clone());
+    keys.clock = Arc::new(move || *clock.lock().unwrap());
+    (fetcher, Arc::new(keys), now)
+}
+
+#[tokio::test]
+async fn an_outage_with_no_set_is_not_fetched_again_at_once() {
+    let (fetcher, keys, now) = flaky();
+    fetcher.down.store(true, Ordering::SeqCst);
+    assert!(matches!(keys.key("a").await, Err(KeyFetchError::TooLarge)));
+    for kid in ["a", "b"] {
+        assert!(matches!(
+            keys.key(kid).await,
+            Err(KeyFetchError::RecentlyFailed)
+        ));
+    }
+    assert_eq!(fetcher.fetches.load(Ordering::SeqCst), 1);
+
+    fetcher.down.store(false, Ordering::SeqCst);
+    advance(&now, FAILURE_BACKOFF);
+    assert!(keys.key("a").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn an_outage_keeps_the_backoff_and_the_current_set() {
+    let (fetcher, keys, now) = flaky();
+    assert!(keys.key("a").await.unwrap().is_some());
+    fetcher.down.store(true, Ordering::SeqCst);
+    advance(&now, UNKNOWN_KID_BACKOFF);
+    assert!(keys.key("made-up").await.is_err());
+    advance(&now, UNKNOWN_KID_BACKOFF - Duration::from_secs(1));
+    assert!(keys.key("another").await.is_err());
+    assert!(keys.key("a").await.unwrap().is_some());
+    assert_eq!(fetcher.fetches.load(Ordering::SeqCst), 2);
+
+    // Past its lifetime the set is not used, reachable provider or not.
+    advance(&now, TTL);
+    assert!(keys.key("a").await.is_err());
+}
+
+#[tokio::test]
+async fn a_known_key_is_answered_while_a_fetch_is_under_way() {
+    let (fetcher, keys, now) = flaky();
+    assert!(keys.key("a").await.unwrap().is_some());
+    fetcher.hold.store(true, Ordering::SeqCst);
+    advance(&now, UNKNOWN_KID_BACKOFF);
+    let slow = {
+        let keys = Arc::clone(&keys);
+        tokio::spawn(async move { keys.key("b").await.map(|key| key.is_some()) })
+    };
+    fetcher.held.notified().await;
+
+    let known = tokio::time::timeout(Duration::from_secs(10), keys.key("a")).await;
+    assert!(known.expect("not held up").unwrap().is_some());
+
+    fetcher.release.notify_one();
+    assert!(!slow.await.unwrap().unwrap());
 }
 
 #[tokio::test]

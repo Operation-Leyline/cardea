@@ -3,24 +3,27 @@
 //! Providers rotate their keys. The cache has a lifetime, and an unknown `kid`
 //! is read as a rotation: it forces a refetch, no more often than
 //! [`UNKNOWN_KID_BACKOFF`], so tokens carrying made-up kids cannot turn
-//! verification into a load generator against the provider. The fetch is
-//! bounded in time and size.
+//! verification into a load generator against the provider. A failed fetch is
+//! remembered, so an outage does not make every request fetch again. A set past
+//! its lifetime is never used, whether or not a new one can be had. The fetch
+//! is bounded in time and size.
 
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use jsonwebtoken::DecodingKey;
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
 /// How long a fetched set is trusted before it is fetched again regardless.
 const TTL: Duration = Duration::from_secs(3600);
 /// How often an unknown `kid` may force a fetch ahead of the lifetime.
 const UNKNOWN_KID_BACKOFF: Duration = Duration::from_secs(60);
+/// How soon a failed fetch is tried again when there is no set to answer from.
+const FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 const TIMEOUT: Duration = Duration::from_secs(3);
 /// A real set is a few kilobytes; anything past this is not a key set.
 const MAX_BYTES: usize = 256 * 1024;
@@ -37,6 +40,9 @@ pub enum KeyFetchError {
     /// The answer is not a key set.
     #[error("the key set could not be read")]
     Malformed(#[source] serde_json::Error),
+    /// The last fetch failed too recently to try again.
+    #[error("the key set could not be fetched a moment ago")]
+    RecentlyFailed,
 }
 
 /// Retrieves the bytes of a key set.
@@ -110,12 +116,22 @@ struct Cached {
 
 type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
+#[derive(Default)]
+struct State {
+    /// The last set fetched.
+    set: Option<Cached>,
+    /// When the last fetch failed, unless one has succeeded since.
+    failed: Option<Instant>,
+}
+
 /// The cached key set published at one URL.
 pub(super) struct Keys {
     url: &'static str,
     fetcher: Arc<dyn KeyFetcher>,
+    /// Never held across a wait, so a known key is answered during a fetch.
+    state: Mutex<State>,
     /// Held across the fetch, so concurrent misses make one request.
-    state: Mutex<Option<Cached>>,
+    fetching: tokio::sync::Mutex<()>,
     clock: Clock,
 }
 
@@ -124,7 +140,8 @@ impl Keys {
         Self {
             url,
             fetcher,
-            state: Mutex::new(None),
+            state: Mutex::default(),
+            fetching: tokio::sync::Mutex::default(),
             clock: Arc::new(Instant::now),
         }
     }
@@ -132,17 +149,66 @@ impl Keys {
     /// The key published under `kid`, or `None` when there is none: a forged
     /// header, or a rotation too recent for the backoff to have noticed.
     pub(super) async fn key(&self, kid: &str) -> Result<Option<DecodingKey>, KeyFetchError> {
-        let mut cached = self.state.lock().await;
-        let now = (self.clock)();
-        let stale = cached.as_ref().is_none_or(|c| {
-            let age = now.saturating_duration_since(c.fetched);
-            age >= TTL || (!c.keys.contains_key(kid) && age >= UNKNOWN_KID_BACKOFF)
-        });
-        if stale {
-            let keys = self.fetch().await?;
-            *cached = Some(Cached { fetched: now, keys });
+        if let Some(answer) = self.cached(kid) {
+            return answer;
         }
-        Ok(cached.as_ref().and_then(|c| c.keys.get(kid)).cloned())
+        let _one = self.fetching.lock().await;
+        // The fetch waited for may have settled it.
+        if let Some(answer) = self.cached(kid) {
+            return answer;
+        }
+        let started = (self.clock)();
+        let fetched = self.fetch().await;
+        let mut state = self.state();
+        match fetched {
+            Ok(keys) => {
+                let key = keys.get(kid).cloned();
+                *state = State {
+                    set: Some(Cached {
+                        fetched: started,
+                        keys,
+                    }),
+                    failed: None,
+                };
+                Ok(key)
+            }
+            Err(error) => {
+                state.failed = Some((self.clock)());
+                Err(error)
+            }
+        }
+    }
+
+    /// The answer for `kid` without fetching, or `None` when it is time to
+    /// fetch.
+    fn cached(&self, kid: &str) -> Option<Result<Option<DecodingKey>, KeyFetchError>> {
+        let state = self.state();
+        let now = (self.clock)();
+        let since = |then: Instant| now.saturating_duration_since(then);
+        let current = state.set.as_ref().filter(|set| since(set.fetched) < TTL);
+        if let Some(key) = current.and_then(|set| set.keys.get(kid)) {
+            return Some(Ok(Some(key.clone())));
+        }
+        if let Some(failed) = state.failed {
+            let wait = if current.is_some() {
+                UNKNOWN_KID_BACKOFF
+            } else {
+                FAILURE_BACKOFF
+            };
+            if since(failed) < wait {
+                return Some(Err(KeyFetchError::RecentlyFailed));
+            }
+            // The wait is over: try again.
+            return None;
+        }
+        current
+            .filter(|set| since(set.fetched) < UNKNOWN_KID_BACKOFF)
+            .map(|_| Ok(None))
+    }
+
+    fn state(&self) -> MutexGuard<'_, State> {
+        // Every write replaces whole values, so a poisoned state is still sound.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     async fn fetch(&self) -> Result<HashMap<String, DecodingKey>, KeyFetchError> {
