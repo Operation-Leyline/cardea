@@ -193,6 +193,35 @@ describe('grantSignInMethods across stacks', () => {
     expect(actions).toContain('dynamodb:PutItem');
   });
 
+  const elsewhere = { env: { account: '222222222222', region: 'us-east-1' } };
+
+  it.each(['imported by ARN', 'defined in its stack', 'in a stack with no account'])(
+    'refuses the option for a role outside the pool account, %s',
+    (variant) => {
+      const { app, auth } = stacks();
+      const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });
+      const other = new Stack(app, 'Elsewhere', variant === 'in a stack with no account' ? {} : elsewhere);
+      const role =
+        variant === 'imported by ARN'
+          ? iam.Role.fromRoleArn(other, 'ApiRole', 'arn:aws:iam::222222222222:role/api')
+          : new iam.Role(other, 'ApiRole', {
+              roleName: 'api',
+              assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+            });
+      expect(() => identity.grantSignInMethods(role, { policyInPoolStack: true })).toThrow(/pool's account/);
+      expect(poolStackPolicies(auth)).toEqual([]);
+    },
+  );
+
+  it('takes the option when neither stack names an account', () => {
+    const app = new App();
+    const other = new Stack(app, 'Other');
+    const auth = new Stack(app, 'Auth');
+    const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });
+    identity.grantSignInMethods(iam.Role.fromRoleName(other, 'ApiRole', 'api'), { policyInPoolStack: true });
+    expect(poolStackPolicies(auth)).toHaveLength(1);
+  });
+
   it('refuses the option for a grantee that is not a role', () => {
     const { auth } = stacks();
     const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });

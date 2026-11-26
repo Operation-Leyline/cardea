@@ -5,6 +5,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
+import { assertSameAccount } from './same-account';
 
 /** The product-built function that runs the library's trigger handler. */
 export interface TriggerProps {
@@ -99,7 +100,7 @@ export function grantTriggers(
   sender: EmailSender | undefined,
 ): void {
   const policy = new iam.Policy(scope, 'TriggerPolicy', {
-    roles: [roleOf(handler, 'triggers.handler')],
+    roles: [roleOf(scope, handler, 'triggers.handler')],
     statements: [
       new iam.PolicyStatement({
         actions: [
@@ -120,15 +121,16 @@ export function grantTriggers(
     policy.addStatements(decrypt);
   } else {
     new iam.Policy(scope, 'EmailSenderPolicy', {
-      roles: [roleOf(sender.handler, 'triggers.customEmailSender.handler')],
+      roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
       statements: [decrypt],
     });
   }
 }
 
-function roleOf(fn: lambda.IFunction, name: string): iam.IRole {
+function roleOf(scope: Construct, fn: lambda.IFunction, name: string): iam.IRole {
   if (!fn.role) {
     throw new Error(`${name} has no role to grant; import it with its role, or define it in this app`);
   }
+  assertSameAccount(scope, fn.role, `${name}'s role`);
   return fn.role;
 }

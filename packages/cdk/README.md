@@ -126,6 +126,11 @@ Such a service cannot read the pool id from the construct either; give it the
 id another way, such as reading the SSM parameter when it runs. Leave the option
 off everywhere else, because it makes the pool's stack depend on the role's.
 
+A policy made in the pool's stack attaches to a role by name, so with the option
+the role must be in the pool's account, and both stacks must say so the same way
+(the same `env.account`, or neither). Anything else is refused. The trigger
+functions' roles are held to the same rule.
+
 ### What you still grant
 
 The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,

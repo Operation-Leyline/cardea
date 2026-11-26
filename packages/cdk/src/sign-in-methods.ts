@@ -3,6 +3,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
+import { assertSameAccount } from './same-account';
 
 /** Where the sign-in method grant puts its statements. */
 export interface SignInMethodsGrantOptions {
@@ -54,6 +55,7 @@ export function grantSignInMethods(
     if (!isRole(principal)) {
       throw new Error('grantSignInMethods: policyInPoolStack needs a grantee with an IAM role');
     }
+    assertSameAccount(scope, principal, 'grantSignInMethods: with policyInPoolStack, the grantee');
     const id = `SignInMethodsPolicy${principal.node.addr}`;
     if (scope.node.tryFindChild(id)) return;
     target = new iam.Policy(scope, id, { roles: [principal] });

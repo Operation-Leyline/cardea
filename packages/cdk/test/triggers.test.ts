@@ -151,6 +151,21 @@ describe('triggers', () => {
     expect(functions.dependencies).not.toContain(auth);
   });
 
+  it.each(['handler', 'email sender'])('refuses a %s whose role is in another account', (which) => {
+    expect(() =>
+      build((stack, handler) => {
+        const foreign = lambda.Function.fromFunctionAttributes(stack, 'Foreign', {
+          functionArn: 'arn:aws:lambda:us-east-1:222222222222:function:triggers',
+          role: iam.Role.fromRoleArn(stack, 'ForeignRole', 'arn:aws:iam::222222222222:role/triggers'),
+        });
+        return {
+          triggers:
+            which === 'handler' ? { handler: foreign } : { handler, customEmailSender: { handler: foreign } },
+        };
+      }),
+    ).toThrow(/pool's account/);
+  });
+
   it('refuses a function whose role it cannot grant', () => {
     expect(() =>
       build((stack) => ({
