@@ -263,7 +263,8 @@ async fn a_code_for_any_other_address_is_neither_sent_nor_counted() {
     assert!(rows(&fixture.ddb, &fixture.table).await.is_empty());
 }
 
-/// Used to be: a sender function without a directory sent no mail at all.
+/// Without a directory, attribute verification codes are refused with nothing
+/// spent, and every other message is still sent.
 #[tokio::test]
 async fn without_a_directory_only_attribute_codes_are_refused() {
     let fixture = sender().await;

@@ -188,8 +188,8 @@ async fn contended(conflicts: usize) -> (Client, loopback::Loopback, Arc<AtomicU
     (Client::from_conf(config), server, calls)
 }
 
-/// Used to be: two sends for one mailbox at once, such as a signup code and a
-/// quick resend, refused the loser as if the table were unavailable.
+/// Two sends for one mailbox at once, such as a signup code and a quick
+/// resend, collide on the counter: the loser goes again and is sent.
 #[tokio::test]
 async fn a_send_that_lost_a_race_for_the_counter_goes_again() {
     let (ddb, _server, calls) = contended(2).await;
@@ -226,8 +226,8 @@ fn the_row_names_the_mailbox_by_hash_never_the_address() {
     assert_eq!(general("not-an-address"), Err(Refusal::Invalid));
 }
 
-/// Used to be: reset requests, which anyone can make for any address, spent
-/// the same budget as sign-in codes and could use it up.
+/// Anyone can request a reset for any address, so resets are counted apart:
+/// running either counter out leaves the other's budget whole.
 #[tokio::test]
 async fn password_resets_and_other_codes_cannot_drain_each_other() {
     let (ddb, table) = table().await;

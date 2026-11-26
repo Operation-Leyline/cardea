@@ -10,7 +10,9 @@
 //! `UpdateItem` on it, and `COGNITO_EMAIL_KEY_ARN` with `kms:Decrypt` on that
 //! key. Attribute verification codes also read the directory:
 //! `IDENTITIES_TABLE` with `GetItem`, and `cognito-idp:AdminGetUser` on the
-//! pool. A function without them refuses those codes and sends the rest.
+//! pool. A function without them refuses those codes and sends the rest, so
+//! signup and reset mail arriving does not show that they are in place: check a
+//! deployment with an attribute verification code too.
 
 pub mod budget;
 mod message;
