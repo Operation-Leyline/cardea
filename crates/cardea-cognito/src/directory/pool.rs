@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::AwsDirectory;
 
 /// The value of one attribute of a Cognito user.
-fn attribute<'a>(raw: &'a AdminGetUserOutput, name: &str) -> Option<&'a str> {
+pub(crate) fn attribute<'a>(raw: &'a AdminGetUserOutput, name: &str) -> Option<&'a str> {
     raw.user_attributes()
         .iter()
         .find(|a| a.name() == name)
@@ -51,7 +51,7 @@ fn checked_user(owner: &EmailOwner, raw: &AdminGetUserOutput) -> Result<User, Er
 
 impl AwsDirectory {
     /// The Cognito user at `username` (or at that email alias), if any.
-    pub(super) async fn get_user(
+    pub(crate) async fn get_user(
         &self,
         username: &str,
     ) -> Result<Option<AdminGetUserOutput>, Error> {
@@ -91,7 +91,7 @@ impl AwsDirectory {
     }
 
     /// `user`'s Cognito record, only while it still reads as exactly `user`.
-    async fn same_user(&self, user: &User) -> Result<AdminGetUserOutput, Error> {
+    pub(crate) async fn same_user(&self, user: &User) -> Result<AdminGetUserOutput, Error> {
         let raw = self
             .get_user(&user.username)
             .await?
@@ -117,7 +117,7 @@ impl AwsDirectory {
         Ok(linked(&self.same_user(user).await?, provider, subject))
     }
 
-    pub(super) async fn link_provider(
+    pub(crate) async fn link_provider(
         &self,
         provider: Provider,
         subject: &str,

@@ -1,24 +1,25 @@
-//! The directory table's four row kinds as strict records.
+//! The directory table's five row kinds as strict records.
 //!
 //! The partition key, `identityKey`, tells them apart: the readiness marker,
-//! the row that owns a mailbox, the row that owns a provider subject, and a
-//! link challenge. The records are the wire format of Leyline's live table:
-//! attribute names, types and key shapes are frozen by tests, and a row that
-//! carries anything else fails to decode. The table's TTL attribute is
-//! `expiresAt`.
+//! the row that owns a mailbox, the row that owns a provider subject, a link
+//! challenge, and the list of a user's linked identities. The first four are
+//! the wire format of Leyline's live table (a link challenge's `provider` and
+//! the whole list are additions): attribute names, types and key shapes are
+//! frozen by tests, and a row that carries anything else fails to decode. The
+//! table's TTL attribute is `expiresAt`.
 
 use std::marker::PhantomData;
 
 use aws_sdk_dynamodb::types::AttributeValue;
 use cardea_core::{EmailOwner, Provider, User};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tabulary::{
     Converter, DecodeContext, DecodeError, DecodeFault, EncodeContext, EncodeError, EncodeFault,
     MultiObject, Native, Record,
 };
 
 /// Every row the table may hold. The derive proves at compile time that the
-/// four key patterns are disjoint.
+/// five key patterns are disjoint.
 #[derive(Debug, MultiObject)]
 #[tabulary(partition = "identityKey")]
 pub enum IdentityTable {
@@ -34,6 +35,9 @@ pub enum IdentityTable {
     /// `LINK#{userId}#{linkId}`.
     #[tabulary(partition(prefix = "LINK#"))]
     Link(LinkRow),
+    /// `METHODS#{userId}`.
+    #[tabulary(partition(prefix = "METHODS#"))]
+    Methods(MethodsRow),
 }
 
 /// The directory's readiness marker. Signup is refused until it reads
@@ -139,6 +143,60 @@ pub struct LinkRow {
     pub provider_subject: Option<String>,
     /// `complete` once the link and its receipt both finished.
     pub status: Option<String>,
+    /// The Cognito name of the provider the challenge is for. A row without it
+    /// was written before there was a choice, and is Google's.
+    pub provider: Option<String>,
+}
+
+/// The identities linked onto one user, with the address each provider gave.
+///
+/// The user pool says which identities are linked; this row remembers what the
+/// pool does not (the provider's address, and removals still under way), and
+/// its `version` orders changes, so that two removals cannot both count on the
+/// method the other is taking away. Every write is conditional on the version
+/// it read. A user without the row has not been listed, linked or unlinked
+/// since the row existed. Code older than the row never reads its key.
+#[derive(Debug, Clone, PartialEq, Record)]
+#[tabulary(
+    rename_all = "camelCase",
+    partition(name = "identityKey", template = "METHODS#{user_id:text}")
+)]
+pub struct MethodsRow {
+    /// The user the identities are linked onto.
+    #[tabulary(key_only)]
+    pub user_id: String,
+    /// One more than the version this write replaced; the first is 1.
+    pub version: i64,
+    /// The identities, as one JSON list.
+    #[tabulary(with = identities_json)]
+    pub identities: Vec<LinkedIdentity>,
+}
+
+/// One identity of a [`MethodsRow`]. Stored as JSON: field names and order are
+/// part of the directory's wire format.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkedIdentity {
+    /// The provider's Cognito name ([`ProviderRow::provider_name`]).
+    pub provider: String,
+    /// The provider's id for the person.
+    pub subject: String,
+    /// The address as the provider wrote it, once a link or sign-in showed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// An unlink has taken the identity away as a sign-in method and has yet
+    /// to finish. It is not linked again until that is done.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removing: bool,
+}
+
+/// Leaves the address out, so that printing a row cannot log it.
+impl std::fmt::Debug for LinkedIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinkedIdentity")
+            .field("provider", &self.provider)
+            .field("removing", &self.removing)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A value stored as its compact JSON text (`serde_json::to_string`). Text
@@ -173,6 +231,10 @@ mod owner_json {
 
 mod user_json {
     pub type Codec = super::JsonText<cardea_core::User>;
+}
+
+mod identities_json {
+    pub type Codec = super::JsonText<Vec<super::LinkedIdentity>>;
 }
 
 #[cfg(test)]

@@ -2,11 +2,13 @@
 //! Cognito's wire protocol on loopback, and a directory over both. No test
 //! reaches AWS.
 
+pub(crate) mod accounts;
 pub(crate) mod cognito;
 pub(crate) mod ddb;
 pub(crate) mod loopback;
 pub(crate) mod pending_change;
 pub(crate) mod product;
+pub(crate) mod provider;
 
 use aws_sdk_dynamodb::types::AttributeValue;
 

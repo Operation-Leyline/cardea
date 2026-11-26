@@ -16,11 +16,12 @@ impl AwsDirectory {
             .and_then(Provider::from_cognito_name)
             .filter(|provider| payload["request"]["providerType"] == provider.rule().cognito_type)
             .ok_or(Error::Invalid)?;
-        let identity = ProviderIdentity::from_verified_claims(
-            provider,
-            &payload["request"]["attributes"]["idToken"],
-        )?;
-        let user = resolve(self, &identity, None)
+        let claims = &payload["request"]["attributes"]["idToken"];
+        let identity = ProviderIdentity::from_verified_claims(provider, claims)?;
+        // Resolving through the recorder keeps the address as the provider
+        // wrote it, for the person's list of sign-in methods.
+        let recorder = self.recording(claims["email"].as_str());
+        let user = resolve(&recorder, &identity, None)
             .await
             .map_err(|error| match error {
                 Error::LinkRequired => TriggerError::LinkRequired(provider.rule().display_name),

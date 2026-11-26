@@ -19,6 +19,7 @@ mod social;
 pub use holder::{HolderReadError, mailbox_holder};
 
 pub(crate) use claim::{Hold, now};
+pub(crate) use pool::attribute;
 pub(crate) use social::ORIGIN_METADATA;
 
 /// The environment variable naming the directory table.
@@ -208,7 +209,10 @@ impl Directory for AwsDirectory {
         self.find_or_create_social_user(owner).await
     }
 
+    /// Refused with [`Error::NotReady`] while an unlink of the identity is
+    /// unfinished.
     async fn link(&self, provider: Provider, subject: &str, user: &User) -> Result<(), Error> {
+        self.admit_identity(user, provider, subject, None).await?;
         self.link_provider(provider, subject, user).await
     }
 }

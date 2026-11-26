@@ -28,7 +28,8 @@
 //! The handler logs through `tracing`; the product installs the subscriber.
 //!
 //! The function reads `IDENTITIES_TABLE` (partition key `identityKey`) and
-//! needs read and write on it, plus `cognito-idp:AdminGetUser`,
+//! needs read and write on it (`DeleteItem` included: a sign-in may finish an
+//! unlink, [`crate::methods`]), plus `cognito-idp:AdminGetUser`,
 //! `AdminCreateUser`, `AdminSetUserPassword` and `AdminLinkProviderForUser` on
 //! the pool. Mail events need what [`crate::mail`] lists.
 

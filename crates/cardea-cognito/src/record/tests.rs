@@ -169,9 +169,54 @@ fn a_link_row_keys_its_user_and_link_id() {
         token_hash: Some("hash-1".into()),
         provider_subject: Some("google-1".into()),
         status: Some("complete".into()),
+        provider: None,
     };
+    // A challenge Leyline wrote names no provider.
     assert_eq!(LinkRow::from_item(&stored).unwrap(), row);
     assert_eq!(row.to_item().unwrap(), stored);
+
+    let mut named = stored;
+    named.insert("provider".into(), s("SignInWithApple"));
+    let row = LinkRow {
+        provider: Some("SignInWithApple".into()),
+        ..row
+    };
+    assert_eq!(LinkRow::from_item(&named).unwrap(), row);
+    assert_eq!(row.to_item().unwrap(), named);
+}
+
+#[test]
+fn a_methods_row_keys_its_user_and_lists_identities_as_compact_json() {
+    let json = concat!(
+        r#"[{"provider":"Google","subject":"google-1","email":"Alice@Example.com"},"#,
+        r#"{"provider":"SignInWithApple","subject":"apple-1","removing":true}]"#
+    );
+    let stored = item(&[
+        ("identityKey", s("METHODS#u1")),
+        ("version", n("3")),
+        ("identities", s(json)),
+    ]);
+    let row = MethodsRow {
+        user_id: "u1".into(),
+        version: 3,
+        identities: vec![
+            LinkedIdentity {
+                provider: "Google".into(),
+                subject: "google-1".into(),
+                email: Some("Alice@Example.com".into()),
+                removing: false,
+            },
+            LinkedIdentity {
+                provider: "SignInWithApple".into(),
+                subject: "apple-1".into(),
+                email: None,
+                removing: true,
+            },
+        ],
+    };
+    assert_eq!(MethodsRow::from_item(&stored).unwrap(), row);
+    assert_eq!(row.to_item().unwrap(), stored);
+    assert!(!format!("{row:?}").contains("Example.com"));
 }
 
 /// An owner record that is not the owner's JSON is refused, never read as

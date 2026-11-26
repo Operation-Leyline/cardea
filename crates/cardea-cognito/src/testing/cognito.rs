@@ -1,4 +1,4 @@
-//! A fake user pool: the four admin calls the library makes, on loopback.
+//! A fake user pool: the five admin calls the library makes, on loopback.
 
 use std::{
     collections::BTreeMap,
@@ -13,6 +13,7 @@ use axum::{
     Json, Router, body::Bytes, extract::State, http::HeaderMap, http::StatusCode, routing::post,
 };
 use serde_json::{Value, json};
+use tokio::sync::Barrier;
 
 use super::loopback::{Loopback, serve};
 
@@ -26,6 +27,8 @@ pub(crate) struct Account {
     pub status: &'static str,
     /// `(providerName, subject)`.
     pub identities: Vec<(String, String)>,
+    /// Report `email_verified` as false.
+    pub unverified: bool,
 }
 
 #[derive(Default)]
@@ -43,6 +46,14 @@ pub(crate) struct PoolState {
     pub link_failures: usize,
     /// Link calls that link and then answer with a failure.
     pub lost_links: usize,
+    /// Calls that take a provider off a user, counted when they do it.
+    pub disables: usize,
+    /// Disable calls that fail without unlinking.
+    pub disable_failures: usize,
+    /// Disable calls that unlink and then answer with a failure.
+    pub lost_disables: usize,
+    /// The next calls reading a user wait here for each other first.
+    pub read_barrier: Option<(Arc<Barrier>, usize)>,
 }
 
 #[derive(Clone, Default)]
@@ -62,6 +73,7 @@ impl Pool {
                 email: email.into(),
                 status,
                 identities: Vec::new(),
+                unverified: false,
             },
         );
     }
@@ -104,6 +116,18 @@ async fn answer(
     let target = headers["x-amz-target"].to_str().unwrap();
     let operation = target.rsplit_once('.').unwrap().1;
     let request: Value = serde_json::from_slice(&body).unwrap();
+    if operation == "AdminGetUser" {
+        let barrier = match &mut pool.state().read_barrier {
+            Some((barrier, waiting)) if *waiting > 0 => {
+                *waiting -= 1;
+                Some(Arc::clone(barrier))
+            }
+            _ => None,
+        };
+        if let Some(barrier) = barrier {
+            barrier.wait().await;
+        }
+    }
     let mut state = pool.state();
     let ok = (StatusCode::OK, Json(json!({})));
     if operation == "AdminLinkProviderForUser" {
@@ -111,7 +135,6 @@ async fn answer(
             state.link_failures -= 1;
             return refusal("InternalErrorException");
         }
-        state.links += 1;
         let name = request["DestinationUser"]["ProviderAttributeValue"]
             .as_str()
             .unwrap();
@@ -124,6 +147,15 @@ async fn answer(
                 .unwrap()
                 .to_owned(),
         );
+        // An identity signs in as one user only.
+        if state
+            .users
+            .iter()
+            .any(|(other, user)| other != name && user.identities.contains(&identity))
+        {
+            return refusal("InvalidParameterException");
+        }
+        state.links += 1;
         state
             .users
             .get_mut(name)
@@ -132,6 +164,32 @@ async fn answer(
             .push(identity);
         if state.lost_links > 0 {
             state.lost_links -= 1;
+            return refusal("InternalErrorException");
+        }
+        return ok;
+    }
+    if operation == "AdminDisableProviderForUser" {
+        if state.disable_failures > 0 {
+            state.disable_failures -= 1;
+            return refusal("InternalErrorException");
+        }
+        let named = &request["User"];
+        assert_eq!(named["ProviderAttributeName"], "Cognito_Subject");
+        let identity = (
+            named["ProviderName"].as_str().unwrap().to_owned(),
+            named["ProviderAttributeValue"].as_str().unwrap().to_owned(),
+        );
+        let Some(user) = state
+            .users
+            .values_mut()
+            .find(|user| user.identities.contains(&identity))
+        else {
+            return refusal("UserNotFoundException");
+        };
+        user.identities.retain(|linked| *linked != identity);
+        state.disables += 1;
+        if state.lost_disables > 0 {
+            state.lost_disables -= 1;
             return refusal("InternalErrorException");
         }
         return ok;
@@ -150,7 +208,7 @@ async fn answer(
                 let mut attributes = vec![
                     json!({"Name":"sub","Value":user.sub}),
                     json!({"Name":"email","Value":user.email}),
-                    json!({"Name":"email_verified","Value":"true"}),
+                    json!({"Name":"email_verified","Value":(!user.unverified).to_string()}),
                 ];
                 if !user.identities.is_empty() {
                     let identities: Vec<Value> = user
@@ -195,6 +253,7 @@ async fn answer(
                     email,
                     status: "FORCE_CHANGE_PASSWORD",
                     identities: Vec::new(),
+                    unverified: false,
                 },
             );
             ok
