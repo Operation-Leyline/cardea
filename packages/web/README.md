@@ -35,12 +35,14 @@ client.subscribe((event) => {
 | `callbackPath`, `logoutPath` | Paths registered on the app client | `/auth/callback`, `/` |
 | `scopes` | OAuth scopes | `openid email` |
 | `userIdClaim` | ID token claim holding the product's user id | `sub` |
+| `importSession` | Where the app's earlier code kept its session ([below](#keeping-people-signed-in-on-adoption)) | nothing is imported |
 
 A missing or malformed setting throws `CardeaError("not-configured")`.
 
 Without React, call `await client.start()` once per page load. It restores the
 session, or finishes a provider sign-in on the callback path and returns
-`returnTo` (and `error`) for your router. Subscribe before calling it.
+`returnTo` (and `error`) for your router. Subscribe before calling it, and call
+it before asking for tokens. `CardeaProvider` does this for you.
 
 ## Sign-in
 
@@ -83,6 +85,42 @@ A provider sign-in is saved only after both tokens verify against the pool's
 signing keys (signature, issuer, client, expiry, nonce, subject). Use the
 `confirmProviderSession` client option to also require your API to accept the
 account first.
+
+## Keeping people signed in on adoption
+
+List where the app's earlier sign-in code kept its session:
+
+```ts
+import { cognitoSdkSession, leylineGoogleSession } from "@operation-leyline/cardea-web";
+
+// leyline-console
+importSession: [leylineGoogleSession(), cognitoSdkSession()],
+// yoru-web
+importSession: [cognitoSdkSession({ prefix: "yoru.auth." })],
+// pigeon-web
+importSession: [cognitoSdkSession()],
+```
+
+| Source | Reads |
+| --- | --- |
+| `cognitoSdkSession()` | `amazon-cognito-identity-js` default storage: `CognitoIdentityServiceProvider.<clientId>.…` |
+| `cognitoSdkSession({ prefix })` | The same layout behind `prefix`, and `<prefix>googleSession` (yoru-web's Google sign-in) |
+| `leylineGoogleSession()` | `leyline.google.session.<clientId>.<issuer>` |
+
+`start` reads them, in order, only when there is no session of this package's
+own. Token getters called meanwhile wait.
+
+- Tokens must verify against the pool's keys for this client and issuer
+  (signature, purpose, subject; there is no nonce). Anything else is ignored and
+  left in place.
+- An expired session with a refresh token is refreshed at once.
+- If that refresh fails, **for any reason, including being offline**, the person
+  is signed out and the old keys are removed.
+- Old keys are removed only after the new session is saved. From then on, every
+  sign-in and sign-out removes them, so an old session cannot come back.
+- Nothing is imported when `endpoint` is set.
+
+To read another layout, implement `LegacySessionSource`.
 
 ## Linking
 

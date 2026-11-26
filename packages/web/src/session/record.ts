@@ -49,6 +49,12 @@ export function toSession(record: StoredSession, userIdClaim: string): Session {
   };
 }
 
+/** Cognito's internal username, when the ID token names it. */
+export function usernameOf(idToken: string): string | undefined {
+  const value = decodeJwt(idToken)["cognito:username"];
+  return typeof value === "string" && value ? value : undefined;
+}
+
 export function subjectOf(record: StoredSession): string {
   return decodeJwt(record.idToken).sub as string;
 }

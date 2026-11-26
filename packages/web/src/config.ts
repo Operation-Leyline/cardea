@@ -1,4 +1,5 @@
 import { CardeaError } from "./errors.js";
+import type { LegacySessionSource } from "./legacy/source.js";
 import type { Provider } from "./providers.js";
 
 /** What a product says about its pool. Empty optional strings count as unset. */
@@ -25,6 +26,11 @@ export interface CardeaConfig {
   scopes?: readonly string[];
   /** ID token claim holding the product's user id. Default `sub`, also used when the claim is absent. */
   userIdClaim?: string;
+  /**
+   * Where the app's earlier sign-in code kept its session, tried in order by
+   * `start` when there is no session of this package's own. Default none.
+   */
+  importSession?: readonly LegacySessionSource[];
 }
 
 /** The configuration after defaults and validation. */
@@ -41,6 +47,7 @@ export interface ResolvedConfig {
   readonly userIdClaim: string;
   readonly sessionKey: string;
   readonly attemptKey: string;
+  readonly importSession: readonly LegacySessionSource[];
 }
 
 function hostedOrigin(value: string): string {
@@ -75,5 +82,6 @@ export function resolveConfig(config: CardeaConfig): ResolvedConfig {
     userIdClaim: config.userIdClaim || "sub",
     sessionKey: `${prefix}session.${issuer}.${clientId}`,
     attemptKey: `${prefix}attempt.${issuer}.${clientId}`,
+    importSession: [...(config.importSession ?? [])],
   };
 }

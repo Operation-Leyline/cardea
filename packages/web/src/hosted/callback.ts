@@ -1,8 +1,7 @@
-import { decodeJwt } from "jose";
 import type { ResolvedConfig } from "../config.js";
 import { CardeaError, type CardeaErrorCode } from "../errors.js";
 import { safeReturnPath } from "../return-path.js";
-import type { StoredSession } from "../session/record.js";
+import { usernameOf, type StoredSession } from "../session/record.js";
 import { consumeAttempt } from "./attempt.js";
 import { requestTokens } from "./token-endpoint.js";
 import type { Verifier } from "./verify.js";
@@ -48,9 +47,4 @@ export async function exchangeCallback(
   } catch (error) {
     throw new CardeaError(error instanceof CardeaError ? error.code : stage, returnTo);
   }
-}
-
-export function usernameOf(idToken: string): string | undefined {
-  const value = decodeJwt(idToken)["cognito:username"];
-  return typeof value === "string" && value ? value : undefined;
 }

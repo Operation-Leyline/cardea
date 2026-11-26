@@ -5,12 +5,13 @@ import { createUser } from "./cognito/user.js";
 import { resolveConfig, type CardeaConfig, type ResolvedConfig } from "./config.js";
 import { authErrorCode, CardeaError } from "./errors.js";
 import { discardAttempt, startAttempt } from "./hosted/attempt.js";
-import { exchangeCallback, usernameOf, type ConfirmProviderSession } from "./hosted/callback.js";
+import { exchangeCallback, type ConfirmProviderSession } from "./hosted/callback.js";
 import { logoutUrl } from "./hosted/logout.js";
 import { providerTokenSource } from "./hosted/refresh.js";
 import { createVerifier } from "./hosted/verify.js";
+import { forgetLegacySessions, importLegacySession } from "./legacy/import.js";
 import type { Provider } from "./providers.js";
-import { justIssued, toSession, type Session, type StoredSession } from "./session/record.js";
+import { justIssued, toSession, usernameOf, type Session, type SessionMethod, type StoredSession } from "./session/record.js";
 import { createRefresher } from "./session/refresh.js";
 import { SessionStore, type SessionEvent } from "./session/store.js";
 
@@ -91,13 +92,18 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   const verify = createVerifier(config);
   const fromPassword = passwordTokenSource(config);
   const fromProvider = providerTokenSource(config, verify);
-  const usable = createRefresher(store, (method) => (method === "password" ? fromPassword : fromProvider));
+  const tokenSource = (method: SessionMethod) => (method === "password" ? fromPassword : fromProvider);
+  const usable = createRefresher(store, tokenSource);
+  const forgetLegacy = () => forgetLegacySessions(config, storage);
+  // Once a session has been saved or ended, here or in another tab, an old one must not return.
+  store.subscribe(forgetLegacy);
 
   // Bumped by sign-out, so that nothing started earlier can save a session after it.
   let epoch = 0;
   let ready = false;
   let failure: CardeaError | null = null;
   let starting: Promise<StartResult> | undefined;
+  let importing: Promise<void> | undefined;
   const listeners = new Set<() => void>();
 
   const snapshot = (): AuthState => {
@@ -143,6 +149,26 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     return { status: "signedIn", session: accept({ version: 1, method: "password", username, ...tokens }, started) };
   }
 
+  function takeOverOldSession(): Promise<void> {
+    return importLegacySession({
+      config,
+      storage,
+      verify,
+      tokenSource,
+      save: (record) => {
+        // A session saved while the import ran wins over it.
+        if (!store.read().record) store.save(record);
+      },
+    });
+  }
+
+  /** Callers that ask while an old session is being taken over wait for it. */
+  function afterImport(): Promise<StoredSession | null> {
+    // Without an import there is no wait, so the account is read as of this call.
+    // `start` reports an import's failure.
+    return importing ? importing.catch(() => {}).then(usableRecord) : usableRecord();
+  }
+
   async function usableRecord(): Promise<StoredSession | null> {
     try {
       const record = await usable();
@@ -186,12 +212,17 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     let result: StartResult = {};
     const url = new URL(window.location.href);
     const onCallback = url.pathname === config.callbackPath;
+    if (store.read().record) forgetLegacy();
     if (onCallback && ["code", "state", "error"].some((name) => url.searchParams.has(name))) {
       result = await finishCallback(url);
     } else {
       // A reload of the emptied callback page has nothing to finish.
       if (onCallback) result = { returnTo: "/" };
       try {
+        if (config.importSession.length && !store.read().record) {
+          importing = takeOverOldSession().finally(() => (importing = undefined));
+          await importing;
+        }
         await usableRecord();
       } catch (error) {
         result.error = error as CardeaError;
@@ -216,11 +247,11 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
       return store.current();
     },
     async getSession() {
-      const record = await usableRecord();
+      const record = await afterImport();
       return record ? toSession(record, config.userIdClaim) : null;
     },
-    getIdToken: async () => (await usableRecord())?.idToken ?? null,
-    getAccessToken: async () => (await usableRecord())?.accessToken ?? null,
+    getIdToken: async () => (await afterImport())?.idToken ?? null,
+    getAccessToken: async () => (await afterImport())?.accessToken ?? null,
     async signUp(email, password, attributes = {}) {
       return { confirmed: await account.signUp(config, email.trim(), password, attributes) };
     },
@@ -252,6 +283,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
       ready = true;
       failure = null;
       discardAttempt(config, attemptStorage);
+      forgetLegacy();
       store.remove("signedOut");
       publish();
       const leave = hosted ?? (method !== undefined && method !== "password");

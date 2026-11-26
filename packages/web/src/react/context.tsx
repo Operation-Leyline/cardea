@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { CardeaClient, StartResult } from "../client.js";
 import { CardeaError } from "../errors.js";
 import type { IdentityLinkAdapter } from "../link/adapter.js";
@@ -47,6 +47,12 @@ export function CardeaProvider(props: CardeaProviderProps) {
       ...(proofSources ? { proofSources } : {}),
     });
   }, [client, hasAdapter]);
+
+  // Layout effects run before any child's effects, so a child asking for a token
+  // on mount already waits for a session being restored.
+  useLayoutEffect(() => {
+    void client.start();
+  }, [client]);
 
   const notify = useRef(onRedirectComplete);
   notify.current = onRedirectComplete;

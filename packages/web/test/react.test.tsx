@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useEffect, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCardeaClient, type IdentityLinkAdapter, type SignInMethod } from "../src/index.js";
+import { cognitoSdkSession, createCardeaClient, type IdentityLinkAdapter, type SignInMethod } from "../src/index.js";
 import { CardeaProvider, useLinkProvider, useSession, useSignIn, useSignInMethods, type CardeaProviderProps } from "../src/react/index.js";
 import { ATTEMPT_KEY, CognitoFailure, CONFIG, installFakeCognito, issueTokens, otherTabWrites, SESSION_KEY, storedSession } from "./fakes/cognito.js";
 
@@ -32,6 +32,27 @@ describe("useSession", () => {
     expect(result.current.session?.subject).toBe("grace");
     act(() => result.current.signOut());
     expect(result.current).toMatchObject({ status: "signedOut", session: null });
+  });
+
+  it("gives a child that asks on mount the token of a session being imported", async () => {
+    installFakeCognito();
+    const old = await issueTokens();
+    const root = `CognitoIdentityServiceProvider.${CONFIG.clientId}`;
+    localStorage.setItem(`${root}.LastAuthUser`, "user-ada");
+    localStorage.setItem(`${root}.user-ada.idToken`, old.id_token);
+    localStorage.setItem(`${root}.user-ada.accessToken`, old.access_token);
+    localStorage.setItem(`${root}.user-ada.refreshToken`, old.refresh_token);
+    const client = createCardeaClient({ ...CONFIG, importSession: [cognitoSdkSession()] });
+    const { result } = render(
+      () => {
+        const { getIdToken } = useSession();
+        const [token, setToken] = useState<string | null>();
+        useEffect(() => void getIdToken().then(setToken), [getIdToken]);
+        return token;
+      },
+      { client },
+    );
+    await waitFor(() => expect(result.current).toBe(old.id_token));
   });
 
   it("finishes a provider callback once and says where to go", async () => {
