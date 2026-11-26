@@ -118,8 +118,8 @@ impl EmailSender {
     /// Send the message a `CustomEmailSender_*` event asks for. The answer is
     /// empty: the encrypted event is never echoed.
     ///
-    /// `directory` is that of the event's pool. A code that would verify an
-    /// address other than the account's own mailbox is refused
+    /// `directory` is that of the event's pool. A code that would verify any
+    /// address but the one the account holds is refused
     /// ([`AwsDirectory::check_verification`]) with nothing spent or sent.
     pub async fn send(
         &self,

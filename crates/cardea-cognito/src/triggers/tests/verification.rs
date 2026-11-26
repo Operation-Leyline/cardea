@@ -55,31 +55,32 @@ async fn every_other_custom_message_is_returned_unchanged() {
     }
 }
 
-/// The account's own address, and any other spelling of the same mailbox.
 #[tokio::test]
-async fn verifying_the_persons_own_mailbox_is_allowed() {
+async fn re_verifying_the_accounts_own_address_is_allowed() {
     let fixture = fixture().await;
     let product = product(&fixture);
     accounts(&fixture, &product).await;
     for source in CHANGING {
-        for email in [
-            "owner@gmail.com",
-            "Owner@Gmail.com",
-            "o.wner+new@googlemail.com",
-        ] {
+        for email in ["owner@gmail.com", "Owner@Gmail.com", " owner@gmail.com "] {
             assert_unchanged(&fixture, &product, message(source, email)).await;
         }
     }
 }
 
 #[tokio::test]
-async fn verifying_a_different_mailbox_is_refused() {
+async fn verifying_any_other_address_is_refused() {
     let fixture = fixture().await;
     let product = product(&fixture);
     accounts(&fixture, &product).await;
-    // Nobody's, another person's, and not an address at all.
+    // Nobody's, another person's, and other spellings of the same mailbox.
     for source in CHANGING {
-        for email in ["new@example.com", "taken@example.com"] {
+        for email in [
+            "new@example.com",
+            "taken@example.com",
+            "o.wner@gmail.com",
+            "owner+new@gmail.com",
+            "owner@googlemail.com",
+        ] {
             let error = handle(&fixture.directory, &product, message(source, email))
                 .await
                 .unwrap_err();
@@ -125,4 +126,82 @@ async fn a_bound_mailbox_is_only_its_users_to_verify() {
         handle(&fixture.directory, &product, intruder).await,
         Err(TriggerError::Identity(Error::EmailChange))
     ));
+}
+
+/// Why an alias is refused. The directory and pool lookups use the signup
+/// spelling, so this is what a pool that applied one would do to the account.
+/// If this stops failing, the refusal can be reconsidered.
+#[tokio::test]
+async fn an_applied_alias_would_break_the_account_so_its_code_is_withheld() {
+    let second_subject = || {
+        inbound(
+            "Google",
+            "g-2",
+            json!({"email":"owner@gmail.com","email_verified":true}),
+        )
+    };
+
+    // A password account, provisioned, with Google linked. Cognito gives its
+    // user a name that is not the address.
+    let native_account = fixture().await;
+    let product_one = product(&native_account);
+    native(&native_account, &product_one, "owner@gmail.com").await;
+    let token = |email: &str| account_event("TokenGeneration_Authentication", "native-sub", email);
+    for event in [token("owner@gmail.com"), google("owner@gmail.com")] {
+        handle(&native_account.directory, &product_one, event)
+            .await
+            .unwrap();
+    }
+    for source in CHANGING {
+        assert!(matches!(
+            handle(
+                &native_account.directory,
+                &product_one,
+                message(source, "o.wner@gmail.com")
+            )
+            .await,
+            Err(TriggerError::Identity(Error::EmailChange))
+        ));
+    }
+    // Had the code been sent and used: no tokens, no linked sign-in, no new one.
+    native_account
+        .pool
+        .state()
+        .users
+        .get_mut("internal")
+        .unwrap()
+        .email = "o.wner@gmail.com".into();
+    for (event, expected) in [
+        (token("o.wner@gmail.com"), Error::NotReady),
+        (google("owner@gmail.com"), Error::Conflict),
+        (second_subject(), Error::NotReady),
+    ] {
+        let error = handle(&native_account.directory, &product_one, event)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, TriggerError::Identity(refused) if *refused == expected),
+            "{expected:?}: {error}"
+        );
+    }
+
+    // A provider-made account: the old address finds nobody, so another pool
+    // user is made for the same person.
+    let social = fixture().await;
+    let product_two = product(&social);
+    handle(&social.directory, &product_two, google("owner@gmail.com"))
+        .await
+        .unwrap();
+    {
+        let mut pool = social.pool.state();
+        let (_, mut account) = pool.users.pop_first().unwrap();
+        account.email = "o.wner@gmail.com".into();
+        pool.users.insert("internal".into(), account);
+    }
+    assert!(
+        handle(&social.directory, &product_two, second_subject())
+            .await
+            .is_err()
+    );
+    assert_eq!(social.pool.state().users.len(), 2);
 }

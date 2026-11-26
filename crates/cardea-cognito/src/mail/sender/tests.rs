@@ -225,13 +225,12 @@ async fn temporary_passwords_and_alerts_are_uncounted() {
 
 const CHANGING: [&str; 2] = ["UpdateUserAttribute", "VerifyUserAttribute"];
 
-/// The account's own address, and another spelling of the same mailbox.
 #[tokio::test]
-async fn a_code_for_the_persons_own_mailbox_is_sent() {
+async fn a_code_for_the_accounts_own_address_is_sent() {
     let fixture = sender().await;
     let outbox = Outbox::default();
     for source in CHANGING {
-        for email in ["victim@example.com", "Victim+new@Example.com"] {
+        for email in ["victim@example.com", "Victim@Example.com"] {
             let mut event = event(source, &format!("{source}{email}"));
             event["request"]["userAttributes"]["email"] = json!(email);
             fixture.send(&outbox, &event).await.unwrap();
@@ -241,16 +240,19 @@ async fn a_code_for_the_persons_own_mailbox_is_sent() {
 }
 
 #[tokio::test]
-async fn a_code_for_a_different_mailbox_is_neither_sent_nor_counted() {
+async fn a_code_for_any_other_address_is_neither_sent_nor_counted() {
     let fixture = sender().await;
     let outbox = Outbox::default();
     for source in CHANGING {
         let mut changed = event(source, "1");
         changed["request"]["userAttributes"]["email"] = json!("new@example.com");
-        // The account's mailbox, asked for by someone else.
-        let mut intruder = event(source, "2");
+        // Another spelling of the account's mailbox.
+        let mut alias = event(source, "2");
+        alias["request"]["userAttributes"]["email"] = json!("victim+new@example.com");
+        // The account's address, asked for by someone else.
+        let mut intruder = event(source, "3");
         intruder["userName"] = json!("intruder");
-        for event in [changed, intruder] {
+        for event in [changed, alias, intruder] {
             assert!(matches!(
                 fixture.send(&outbox, &event).await,
                 Err(MailError::Identity(Error::EmailChange))

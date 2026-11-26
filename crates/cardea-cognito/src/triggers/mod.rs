@@ -16,7 +16,7 @@
 //! | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
 //! | `TokenGeneration_*` | provision if not yet, then the product's claims |
 //! | `TokenGeneration_ClientCredentials` | nothing: there is no person |
-//! | `CustomMessage_UpdateUserAttribute`, `_VerifyUserAttribute` | refuse an address that is not the account's own mailbox; otherwise nothing |
+//! | `CustomMessage_UpdateUserAttribute`, `_VerifyUserAttribute` | refuse any address but the one the account holds; otherwise nothing |
 //! | `CustomMessage_*`, any other | nothing |
 //! | `CustomEmailSender_*` | refuse the same changed address; spend the mailbox's budget, decrypt, hand to the product (feature `email-sender`) |
 //!

@@ -139,7 +139,7 @@ fn main() { cardea_cognito::triggers::run(MyProduct::from_env()) }
 | `PostConfirmation_ConfirmSignUp` | provision through the product hook |
 | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
 | `PreTokenGeneration` | provision if not yet (operator-created accounts), then the product's claims; a machine client's `TokenGeneration_ClientCredentials` passes through untouched |
-| `CustomMessage_*` | refuse `_UpdateUserAttribute` and `_VerifyUserAttribute` for an address that is not the account's own mailbox; otherwise return the event untouched |
+| `CustomMessage_*` | refuse `_UpdateUserAttribute` and `_VerifyUserAttribute` for any address but the one on the account's directory row, compared trimmed and lowercased (aliases too: the directory and pool lookups use the signup spelling); otherwise return the event untouched |
 | `CustomEmailSender_*` | refuse the same changed address; spend the mailbox's daily budget (8, or 3 for password resets), decrypt, hand to `mail()` |
 
 ## Sign-in methods and linking

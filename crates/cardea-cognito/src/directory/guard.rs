@@ -71,17 +71,24 @@ impl AwsDirectory {
         }
     }
 
-    /// Refuse, with [`Error::EmailChange`], to verify an address that does not
-    /// reach the account's own mailbox: ownership in the directory would not
-    /// follow it. `email` is the address the code is for.
+    /// Refuse, with [`Error::EmailChange`], to verify any address but the one
+    /// the account holds: `email`, the address the code is for, must be the one
+    /// on the account's own directory row once trimmed and lowercased.
+    ///
+    /// Another spelling of the same mailbox (an alias) is refused too, because
+    /// the directory and pool lookups use the signup spelling: an account whose
+    /// pool address changed to an alias could get no tokens, sign in through no
+    /// provider, and a provider-made one could gain a second pool user.
     pub async fn check_verification(
         &self,
         email: &str,
         username: &str,
         user_id: &str,
     ) -> Result<(), Error> {
-        match self.email_row(email).await? {
-            Some(row) if self.owns(&row, username, user_id).await? => Ok(()),
+        let address = normalize_email(email)?;
+        let held = |row: &EmailRow| normalize_email(&row.record.email).is_ok_and(|e| e == address);
+        match self.email_row(&address).await? {
+            Some(row) if held(&row) && self.owns(&row, username, user_id).await? => Ok(()),
             _ => Err(Error::EmailChange),
         }
     }
