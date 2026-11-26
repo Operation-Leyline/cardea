@@ -14,17 +14,24 @@ export type Verifier = (
   expected: { nonce?: string; subject?: string; allowExpired?: boolean; emailOptional?: boolean },
 ) => Promise<string>;
 
+/** jose's findings against a token itself. */
+const TOKEN_FAULTS = [
+  errors.JWTClaimValidationFailed,
+  errors.JWTExpired,
+  errors.JWTInvalid,
+  errors.JWSInvalid,
+  errors.JWSSignatureVerificationFailed,
+  errors.JWKSNoMatchingKey,
+  errors.JOSEAlgNotAllowed,
+];
+
 /**
- * Whether verification failed because the pool's keys could not be fetched,
- * which says nothing about the tokens.
+ * Whether verification found fault with the tokens. Any other failure, such as
+ * signing keys that could not be fetched or read, says nothing about them.
  */
-export function keysUnavailable(error: unknown): boolean {
-  // `fetch` rejects with a TypeError; jose uses its generic error for a bad key set response.
-  return (
-    error instanceof TypeError ||
-    error instanceof errors.JWKSTimeout ||
-    (error instanceof errors.JOSEError && error.code === errors.JOSEError.code)
-  );
+export function tokensRejected(error: unknown): boolean {
+  // The verifier's own checks throw CardeaError.
+  return error instanceof CardeaError || TOKEN_FAULTS.some((fault) => error instanceof fault);
 }
 
 export function createVerifier(config: ResolvedConfig): Verifier {

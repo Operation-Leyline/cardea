@@ -1,6 +1,6 @@
 import type { ResolvedConfig } from "../config.js";
 import { CardeaError } from "../errors.js";
-import { keysUnavailable, type Verifier } from "../hosted/verify.js";
+import { tokensRejected, type Verifier } from "../hosted/verify.js";
 import { isFresh, justIssued, usernameOf, type SessionMethod, type StoredSession } from "../session/record.js";
 import { RefreshExpired, type TokenSource } from "../session/refresh.js";
 import type { LegacySession, LegacySessionSource } from "./source.js";
@@ -68,8 +68,8 @@ export async function importLegacySession(dependencies: ImportDependencies): Pro
       subject = await verify(tokens, { ...checks, ...(recorded ? { subject: recorded } : {}) });
       record = { version: 1, ...tokens, username: usernameOf(tokens.idToken) ?? username ?? subject };
     } catch (error) {
-      if (keysUnavailable(error)) return postpone();
-      continue;
+      if (tokensRejected(error)) continue;
+      return postpone();
     }
     if (!isFresh(record)) {
       try {

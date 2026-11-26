@@ -224,6 +224,7 @@ describe.each(Object.entries(SOURCES))("importing from %s", (_name, { source, sa
     ["another client's access token", { access: { client_id: "other-client" } }],
     ["another issuer", { issuer: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Other" }],
     ["an unknown signing key", { foreignKey: true }],
+    ["a key id the pool does not list", { kid: "retired-key", foreignKey: true }],
   ])("never imports tokens for %s, fresh or expired", async (_case, options) => {
     for (const age of [{}, EXPIRED]) {
       localStorage.clear();
@@ -231,7 +232,8 @@ describe.each(Object.entries(SOURCES))("importing from %s", (_name, { source, sa
       await save({ ...options, ...age });
       const before = keys();
       const { client } = setup([source]);
-      await client.start();
+      // Not an outage: nothing is reported, and later sources would be tried.
+      await expect(client.start()).resolves.toEqual({});
       expect(client.getState().status).toBe("signedOut");
       expect(refreshRequests(cognito)).toBe(0);
       expect(keys()).toEqual(before);
@@ -300,7 +302,7 @@ describe("unreadable old values", () => {
     if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
     const { client } = setup([cognitoSdkSession()]);
-    await client.start();
+    await expect(client.start()).resolves.toEqual({});
     expect(client.getState().status).toBe("signedOut");
     expect(refreshRequests(cognito)).toBe(0);
   });
@@ -309,7 +311,7 @@ describe("unreadable old values", () => {
     installFakeCognito();
     await saveHosted(GOOGLE, { recorded: "mallory" });
     const { client } = setup([leylineGoogleSession()]);
-    await client.start();
+    await expect(client.start()).resolves.toEqual({});
     expect(client.getState().status).toBe("signedOut");
   });
 });
@@ -345,6 +347,11 @@ describe("which old session is taken", () => {
     ["a 500", async () => new Response("down", { status: 500 })],
     ["an unreadable body", async () => new Response("<html>", { status: 200 })],
     ["a timeout", async (): Promise<Response> => Promise.reject(new DOMException("timed out", "TimeoutError"))],
+    ["JSON that is not a key set", async () => Response.json({ message: "temporarily unavailable" })],
+    [
+      "a damaged key",
+      async () => Response.json({ keys: [{ kid: "pool-key", kty: "RSA", alg: "RS256", use: "sig", e: "AQAB" }] }),
+    ],
   ])("does not take a later source while the signing keys answer with %s", async (_name, answer) => {
     const cognito = installFakeCognito();
     await saveHosted(GOOGLE);

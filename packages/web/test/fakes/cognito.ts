@@ -32,6 +32,8 @@ export interface TokenOptions {
   issuer?: string;
   /** Sign with a key the pool does not publish. */
   foreignKey?: boolean;
+  /** Key id named in the token header. */
+  kid?: string;
 }
 
 export async function issueTokens(options: TokenOptions = {}) {
@@ -39,7 +41,7 @@ export async function issueTokens(options: TokenOptions = {}) {
   const now = Math.floor(Date.now() / 1000);
   const sign = (claims: Record<string, unknown>) =>
     new SignJWT({ sub: subject, iss: options.issuer ?? ISSUER, iat: now, exp: now + expiresIn, ...claims })
-      .setProtectedHeader({ alg: "RS256", kid: "pool-key" })
+      .setProtectedHeader({ alg: "RS256", kid: options.kid ?? "pool-key" })
       .sign(options.foreignKey ? foreign.privateKey : signing.privateKey);
   return {
     id_token: await sign({
