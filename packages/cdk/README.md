@@ -108,11 +108,16 @@ identity.grantSignInMethods(apiFunction);
 
 It grants `cognito-idp:AdminGetUser`, `AdminLinkProviderForUser` and
 `AdminDisableProviderForUser` on this pool, and read and write on the directory
-table. It refuses a trigger function or its role.
+table. It refuses a trigger function or its role, and a grantee with no role,
+such as a function imported by ARN alone (import it with
+`Function.fromFunctionAttributes` and its role).
 
-The grant makes the service depend on the pool. If your trigger functions are
-in another stack than the pool, keep the API service out of that stack, or the
-two stacks depend on each other.
+Normally the statements go on the service's role, and a service in another stack
+depends on the pool's stack. If the service's role is in a stack the pool's
+stack already depends on (the trigger functions' stack, or the stack of a table
+or key you passed in), the construct puts them in a policy in the pool's stack
+instead. A service there cannot read the pool id from the construct either; give
+it the id some other way, such as reading the SSM parameter when it runs.
 
 ### What you still grant
 

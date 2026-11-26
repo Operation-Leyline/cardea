@@ -4,7 +4,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Construct } from 'constructs';
+import { Construct, IConstruct } from 'constructs';
 import { addBrowserClient, addDevClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
 import { addBrandedDomain, BrandedDomainProps } from './domains';
@@ -66,6 +66,7 @@ export class IdentityPool extends Construct {
   /** Set when there is a custom email sender; its function needs this key's ARN to decrypt. */
   public readonly emailKey?: kms.IKey;
   private readonly triggerFunctions: lambda.IFunction[];
+  private readonly passedIn: (IConstruct | undefined)[];
 
   constructor(scope: Construct, id: string, props: IdentityPoolProps) {
     super(scope, id);
@@ -73,6 +74,13 @@ export class IdentityPool extends Construct {
     const sender = emailSender(this, props.triggers, props.removalPolicy);
     this.emailKey = sender?.key;
     this.triggerFunctions = sender ? [handler, sender.handler] : [handler];
+    this.passedIn = [
+      ...this.triggerFunctions,
+      props.triggers.customEmailSender?.key,
+      props.directory?.table,
+      props.brandedDomain?.hostedZone,
+      props.brandedDomain?.certificate,
+    ];
 
     this.userPool = createUserPool(this, props, lambdaTriggers(handler, sender));
     wireInboundFederation(this.userPool, handler);
@@ -128,6 +136,11 @@ export class IdentityPool extends Construct {
    * on this pool, and read and write on the directory table.
    */
   grantSignInMethods(grantee: iam.IGrantable): void {
-    grantSignInMethods(grantee, this.userPool, this.directory, this.triggerFunctions);
+    grantSignInMethods(this, grantee, {
+      userPool: this.userPool,
+      directory: this.directory,
+      triggerFunctions: this.triggerFunctions,
+      passedIn: this.passedIn,
+    });
   }
 }
