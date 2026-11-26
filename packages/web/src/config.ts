@@ -22,7 +22,7 @@ export interface CardeaConfig {
   callbackPath?: string;
   /** Path hosted sign-out returns to. Default `/`. */
   logoutPath?: string;
-  /** OAuth scopes. Default `openid email`. */
+  /** OAuth scopes. Default `openid email`; both must be included. */
   scopes?: readonly string[];
   /** ID token claim holding the product's user id. Default `sub`, also used when the claim is absent. */
   userIdClaim?: string;
@@ -46,6 +46,7 @@ export interface ResolvedConfig {
   readonly scopes: readonly string[];
   readonly userIdClaim: string;
   readonly sessionKey: string;
+  readonly generationKey: string;
   readonly attemptKey: string;
   readonly importSession: readonly LegacySessionSource[];
 }
@@ -69,6 +70,9 @@ export function resolveConfig(config: CardeaConfig): ResolvedConfig {
   const loginDomain = config.loginDomain ? hostedOrigin(config.loginDomain) : null;
   const issuer = `https://cognito-idp.${userPoolId.split("_")[0]}.amazonaws.com/${userPoolId}`;
   const prefix = config.storagePrefix || "cardea.auth.";
+  const scopes = config.scopes ?? ["openid", "email"];
+  // A provider session is refused without an email claim, which takes both of these.
+  if (!["openid", "email"].every((scope) => scopes.includes(scope))) throw new CardeaError("not-configured");
   return {
     userPoolId,
     clientId,
@@ -78,9 +82,10 @@ export function resolveConfig(config: CardeaConfig): ResolvedConfig {
     providers: loginDomain && !endpoint ? [...(config.providers ?? [])] : [],
     callbackPath: config.callbackPath || "/auth/callback",
     logoutPath: config.logoutPath || "/",
-    scopes: config.scopes ?? ["openid", "email"],
+    scopes,
     userIdClaim: config.userIdClaim || "sub",
     sessionKey: `${prefix}session.${issuer}.${clientId}`,
+    generationKey: `${prefix}generation.${issuer}.${clientId}`,
     attemptKey: `${prefix}attempt.${issuer}.${clientId}`,
     importSession: [...(config.importSession ?? [])],
   };

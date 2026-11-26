@@ -44,13 +44,17 @@ describe("Google Identity Services", () => {
     script(GOOGLE_SCRIPT)!.onload!(new Event("load"));
     await loading;
     const container = document.createElement("div");
+    container.append(document.createElement("nav"));
     const token = source.request(request({ container }));
     const options = id.initialize.mock.calls[0][0];
     expect(options).toMatchObject({ client_id: "provider-client", nonce: "challenge-nonce", auto_select: false });
-    expect(id.renderButton).toHaveBeenCalledWith(container, expect.objectContaining({ theme: "outline" }));
+    const host = id.renderButton.mock.calls[0][0];
+    expect(host.parentElement).toBe(container);
+    expect(id.renderButton).toHaveBeenCalledWith(host, expect.objectContaining({ theme: "outline" }));
     options.callback({ credential: "google-id-token" });
     await expect(token).resolves.toBe("google-id-token");
-    expect(container.childNodes).toHaveLength(0);
+    // The caller's own content stays.
+    expect(container.innerHTML).toBe("<nav></nav>");
   });
 
   it("needs a container, and removes the button on abort", async () => {

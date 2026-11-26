@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCardeaClient, type SessionEvent, type SignInResult } from "../src/index.js";
-import { authenticationResult, CognitoFailure, CONFIG, installFakeCognito, issueTokens, SESSION_KEY } from "./fakes/cognito.js";
+import { authenticationResult, CognitoFailure, CONFIG, GENERATION_KEY, installFakeCognito, issueTokens, SESSION_KEY, storedSession } from "./fakes/cognito.js";
 
 const PASSWORD = "Correct-Horse-12";
 
@@ -25,7 +25,7 @@ describe("password sign-in", () => {
     expect(cognito.calls[0].body.AuthParameters.USERNAME).toBe("ada@example.test");
     expect(JSON.stringify(cognito.calls)).not.toContain(PASSWORD);
     expect(result.session).toMatchObject({ subject: "ada", userId: "ada", method: "password", email: "ada@example.test" });
-    expect(Object.keys(localStorage)).toEqual([SESSION_KEY]);
+    expect(Object.keys(localStorage).sort()).toEqual([GENERATION_KEY, SESSION_KEY]);
     expect(localStorage.getItem(SESSION_KEY)).not.toContain(PASSWORD);
     expect(client.getState()).toMatchObject({ status: "signedIn", session: { subject: "ada" } });
     expect(events.map((event) => event.type)).toEqual(["signedIn"]);
@@ -67,6 +67,7 @@ describe("password sign-in", () => {
     };
     const first = expectStatus(await client.signIn("ada@example.test", "temporary"), "newPasswordRequired");
     expect(localStorage.length).toBe(0);
+    expect(first.requiredAttributes).toEqual([]);
     const second = expectStatus(await first.completeNewPassword(PASSWORD), "totpRequired");
     expect(cognito.calls.at(-1)!.body.ChallengeResponses).not.toHaveProperty("userAttributes.email_verified");
     expectStatus(await second.submitTotp(" 123 456 "), "signedIn");
@@ -83,7 +84,28 @@ describe("password sign-in", () => {
     const challenge = expectStatus(await client.signIn("ada@example.test", PASSWORD), "totpRequired");
     client.signOut();
     await expect(challenge.submitTotp("123456")).rejects.toMatchObject({ code: "session-superseded" });
-    expect(localStorage.length).toBe(0);
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull();
+  });
+
+  it("sends back only the profile attributes Cognito says are missing", async () => {
+    const { cognito, client } = setup();
+    cognito.operations.RespondToAuthChallenge = async (body) =>
+      body.ChallengeName === "PASSWORD_VERIFIER"
+        ? {
+            ChallengeName: "NEW_PASSWORD_REQUIRED",
+            Session: "s",
+            ChallengeParameters: {
+              userAttributes: '{"email_verified":"true"}',
+              requiredAttributes: '["userAttributes.given_name"]',
+            },
+          }
+        : authenticationResult(await issueTokens());
+    const challenge = expectStatus(await client.signIn("ada@example.test", "temporary"), "newPasswordRequired");
+    expect(challenge.requiredAttributes).toEqual(["given_name"]);
+    await challenge.completeNewPassword(PASSWORD, { given_name: "Ada", email_verified: "true" });
+    const sent = cognito.calls.at(-1)!.body.ChallengeResponses;
+    expect(sent["userAttributes.given_name"]).toBe("Ada");
+    expect(sent).not.toHaveProperty("userAttributes.email_verified");
   });
 
   it("reports an unconfirmed account as a step, and a wrong password as Cognito's error", async () => {
@@ -96,6 +118,57 @@ describe("password sign-in", () => {
     cognito.operations.InitiateAuth = () => new CognitoFailure("NotAuthorizedException");
     await expect(client.signIn("ada@example.test", "wrong")).rejects.toMatchObject({ code: "NotAuthorizedException" });
     expect(localStorage.length).toBe(0);
+  });
+});
+
+describe("a sign-in under way, and other tabs", () => {
+  /** Two tabs, the first part-way through a sign-in that wants a code. */
+  async function twoTabs(saved?: string) {
+    const first = setup();
+    first.cognito.operations.RespondToAuthChallenge = async (body) =>
+      body.ChallengeName === "PASSWORD_VERIFIER"
+        ? { ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "s", ChallengeParameters: {} }
+        : authenticationResult(await issueTokens());
+    if (saved) localStorage.setItem(SESSION_KEY, saved);
+    const challenge = expectStatus(await first.client.signIn("ada@example.test", PASSWORD), "totpRequired");
+    const other = createCardeaClient(CONFIG, { redirect: () => {} });
+    return { ...first, challenge, other };
+  }
+
+  it.each([
+    ["there was a session", true],
+    ["there was none", false],
+  ])("is abandoned when another tab signs out and %s", async (_name, had) => {
+    const { challenge, other } = await twoTabs(had ? await storedSession({ subject: "grace" }) : undefined);
+    other.signOut();
+    await expect(challenge.submitTotp("123456")).rejects.toMatchObject({ code: "session-superseded" });
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull();
+  });
+
+  it("is abandoned when another tab signs in", async () => {
+    const { challenge, other, cognito } = await twoTabs();
+    const normal = cognito.operations.RespondToAuthChallenge;
+    cognito.operations.RespondToAuthChallenge = async () => authenticationResult(await issueTokens({ subject: "grace" }));
+    await other.signIn("grace@example.test", PASSWORD);
+    cognito.operations.RespondToAuthChallenge = normal;
+    await expect(challenge.submitTotp("123456")).rejects.toMatchObject({ code: "session-superseded" });
+    expect(other.currentSession()?.subject).toBe("grace");
+  });
+
+  it.each([
+    ["refreshes its session", false],
+    ["finds its session expired", true],
+  ])("carries on when another tab %s", async (_name, expired) => {
+    const { challenge, other, cognito, client } = await twoTabs(await storedSession({ subject: "grace", expiresIn: -10 }));
+    if (expired) cognito.operations.InitiateAuth = () => new CognitoFailure("NotAuthorizedException");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let settled = false;
+    const refreshed = other.getIdToken().finally(() => (settled = true));
+    while (!settled) await vi.advanceTimersByTimeAsync(expired ? 1000 : 0);
+    await refreshed;
+    vi.useRealTimers();
+    expectStatus(await challenge.submitTotp("123456"), "signedIn");
+    expect(client.currentSession()?.subject).toBe("ada");
   });
 });
 
@@ -140,6 +213,8 @@ describe("configuration", () => {
     { clientId: "" },
     { loginDomain: "http://login.example.test" },
     { loginDomain: "https://login.example.test/path" },
+    { scopes: ["openid", "phone"] },
+    { scopes: ["email"] },
   ])("refuses %o", (bad) => {
     expect(() => createCardeaClient({ ...CONFIG, ...bad })).toThrow(expect.objectContaining({ code: "not-configured" }));
   });

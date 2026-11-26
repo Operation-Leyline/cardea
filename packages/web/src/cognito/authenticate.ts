@@ -4,7 +4,11 @@ import { CardeaError } from "../errors.js";
 /** Where a password sign-in stands after one exchange with Cognito. */
 export type AuthStep =
   | { kind: "session"; session: CognitoUserSession }
-  | { kind: "newPassword"; next: (password: string) => Promise<AuthStep> }
+  | {
+      kind: "newPassword";
+      requiredAttributes: readonly string[];
+      next: (password: string, attributes?: Record<string, string>) => Promise<AuthStep>;
+    }
   | { kind: "totp"; next: (code: string) => Promise<AuthStep> };
 
 /**
@@ -17,12 +21,19 @@ function step(user: CognitoUser, start: (callbacks: Parameters<CognitoUser["auth
     const callbacks: Parameters<CognitoUser["authenticateUser"]>[1] = {
       onSuccess: (session) => resolve({ kind: "session", session }),
       onFailure: reject,
-      // Not a failure: the password was right and Cognito wants it replaced. No
-      // attributes go back, because Cognito refuses its read-only ones.
-      newPasswordRequired: () =>
+      // Not a failure: the password was right and Cognito wants it replaced.
+      // Only the attributes it reports missing go back, because it refuses its
+      // read-only ones.
+      newPasswordRequired: (_current: unknown, missing: string[] = []) =>
         resolve({
           kind: "newPassword",
-          next: (password) => step(user, (next) => user.completeNewPasswordChallenge(password, {}, next)),
+          requiredAttributes: missing,
+          next: (password, attributes = {}) => {
+            const wanted = Object.entries(attributes).filter(([name]) => missing.includes(name));
+            return step(user, (next) =>
+              user.completeNewPasswordChallenge(password, Object.fromEntries(wanted), next),
+            );
+          },
         }),
       totpRequired: () =>
         resolve({

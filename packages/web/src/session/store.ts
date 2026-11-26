@@ -1,4 +1,5 @@
 import { CardeaError } from "../errors.js";
+import { randomValue } from "../random.js";
 import { parseRecord, toSession, type Session, type StoredSession } from "./record.js";
 
 /** Whether this tab made a change, or another tab sharing the storage did. */
@@ -44,6 +45,7 @@ export class SessionStore {
   constructor(
     private readonly storage: () => Storage,
     private readonly key: string,
+    private readonly generationKey: string,
     private readonly userIdClaim: string,
     private readonly target: Window | undefined,
   ) {
@@ -60,6 +62,27 @@ export class SessionStore {
       // A browser that blocks storage has no saved session.
     }
     return { raw, record: parseRecord(raw) };
+  }
+
+  /**
+   * Changes with every sign-in and sign-out, in any tab. A token refresh or an
+   * expiry leaves it alone.
+   */
+  generation(): string | null {
+    try {
+      return this.storage().getItem(this.generationKey);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Marks a sign-in or sign-out, so that sign-ins begun before it are abandoned. */
+  supersede(): void {
+    try {
+      this.storage().setItem(this.generationKey, randomValue());
+    } catch {
+      // A browser that refuses this write refuses to save a session too.
+    }
   }
 
   /** The account as last reported to listeners. */

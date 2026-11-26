@@ -7,7 +7,7 @@ import {
   type ClientOptions,
   type SessionEvent,
 } from "../src/index.js";
-import { authenticationResult, CognitoFailure, CONFIG, deferred, installFakeCognito, ISSUER, issueTokens, otherTabWrites, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
+import { authenticationResult, CognitoFailure, CONFIG, deferred, GENERATION_KEY, installFakeCognito, ISSUER, issueTokens, otherTabWrites, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
 
 const SDK = `CognitoIdentityServiceProvider.${CONFIG.clientId}`;
 const GOOGLE = `leyline.google.session.${CONFIG.clientId}.${ISSUER}`;
@@ -58,7 +58,8 @@ function setup(importSession: CardeaConfig["importSession"], options: ClientOpti
   return { client, events };
 }
 
-const keys = () => Object.keys(localStorage).sort();
+/** Stored keys, leaving out the sign-in generation mark. */
+const keys = () => Object.keys(localStorage).filter((key) => key !== GENERATION_KEY).sort();
 const saved = () => JSON.parse(localStorage.getItem(SESSION_KEY)!);
 
 /** Answers a refresh from either endpoint. */

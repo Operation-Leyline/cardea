@@ -44,7 +44,12 @@ export interface StartResult {
 export type SignInResult =
   | { status: "signedIn"; session: Session }
   | { status: "confirmationRequired"; email: string }
-  | { status: "newPasswordRequired"; completeNewPassword: (password: string) => Promise<SignInResult> }
+  | {
+      status: "newPasswordRequired";
+      /** Profile attributes the account still lacks; pass each to `completeNewPassword`. */
+      requiredAttributes: readonly string[];
+      completeNewPassword: (password: string, attributes?: Record<string, string>) => Promise<SignInResult>;
+    }
   | { status: "totpRequired"; submitTotp: (code: string) => Promise<SignInResult> };
 
 export interface CardeaClient {
@@ -88,7 +93,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   const redirect = options.redirect ?? ((url: string) => window.location.assign(url));
   const page = typeof window === "undefined" ? undefined : window;
 
-  const store = new SessionStore(storage, config.sessionKey, config.userIdClaim, page);
+  const store = new SessionStore(storage, config.sessionKey, config.generationKey, config.userIdClaim, page);
   const verify = createVerifier(config);
   const fromPassword = passwordTokenSource(config);
   const fromProvider = providerTokenSource(config, verify);
@@ -98,8 +103,10 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   // Once a session has been saved or ended, here or in another tab, an old one must not return.
   store.subscribe(forgetLegacy);
 
-  // Bumped by sign-out, so that nothing started earlier can save a session after it.
-  let epoch = 0;
+  // Sign-outs in this tab, counted even if storage refuses the shared mark.
+  let signOuts = 0;
+  /** A sign-in may save only if this is unchanged since it began. */
+  const mark = () => `${signOuts}:${store.generation()}`;
   let ready = false;
   let failure: CardeaError | null = null;
   let starting: Promise<StartResult> | undefined;
@@ -121,21 +128,24 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     publish();
   });
 
-  function accept(record: StoredSession, started: number): Session {
-    if (started !== epoch) throw new CardeaError("session-superseded");
+  function accept(record: StoredSession, started: string, returnTo?: string): Session {
+    if (started !== mark()) throw new CardeaError("session-superseded", returnTo);
     ready = true;
     failure = null;
     discardAttempt(config, attemptStorage);
+    store.supersede();
     store.save(justIssued(record));
     publish();
     return toSession(record, config.userIdClaim);
   }
 
-  function signInResult(step: AuthStep, email: string, started: number): SignInResult {
+  function signInResult(step: AuthStep, email: string, started: string): SignInResult {
     if (step.kind === "newPassword") {
       return {
         status: "newPasswordRequired",
-        completeNewPassword: async (password) => signInResult(await step.next(password), email, started),
+        requiredAttributes: step.requiredAttributes,
+        completeNewPassword: async (password, attributes) =>
+          signInResult(await step.next(password, attributes), email, started),
       };
     }
     if (step.kind === "totp") {
@@ -187,8 +197,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   async function finishCallback(callback: URL): Promise<StartResult> {
     // Drop the code from the address bar before anything else can read it.
     window.history.replaceState(window.history.state, "", config.callbackPath);
-    const started = epoch;
-    const before = store.read().raw;
+    const started = mark();
     try {
       if (!config.loginDomain) throw new CardeaError("provider-unavailable", "/");
       const { record, returnTo } = await exchangeCallback(
@@ -198,9 +207,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
         verify,
         options.confirmProviderSession,
       );
-      // Another tab signing in or out during the exchange wins over it.
-      if (store.read().raw !== before) throw new CardeaError("session-superseded", returnTo);
-      accept(record, started);
+      accept(record, started, returnTo);
       return { returnTo };
     } catch (error) {
       const known = error instanceof CardeaError ? error : new CardeaError("token-exchange-failed", "/");
@@ -259,7 +266,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     resendConfirmationCode: (email) => account.resendConfirmationCode(config, email.trim()),
     async signIn(email, password) {
       const address = email.trim();
-      const started = epoch;
+      const started = mark();
       let step: AuthStep;
       try {
         step = await authenticate(createUser(config, address), address, password);
@@ -279,7 +286,8 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     },
     signOut({ hosted } = {}) {
       const method = store.read().record?.method;
-      epoch++;
+      signOuts++;
+      store.supersede();
       ready = true;
       failure = null;
       discardAttempt(config, attemptStorage);

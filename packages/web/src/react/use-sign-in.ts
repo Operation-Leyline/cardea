@@ -16,9 +16,11 @@ interface View {
   step: SignInStep;
   /** The address the current step is about. */
   email: string;
+  /** Attributes `completeNewPassword` must also receive. */
+  requiredAttributes: readonly string[];
 }
 
-const START: View = { step: "credentials", email: "" };
+const START: View = { step: "credentials", email: "", requiredAttributes: [] };
 type Challenge = Extract<SignInResult, { status: "newPasswordRequired" | "totpRequired" }>;
 
 /**
@@ -37,9 +39,9 @@ export function useSignIn() {
   const generation = useRef(0);
   const email = useRef("");
 
-  const show = useCallback((step: SignInStep, address: string) => {
+  const show = useCallback((step: SignInStep, address: string, requiredAttributes: readonly string[] = []) => {
     email.current = address;
-    setView({ step, email: address });
+    setView({ step, email: address, requiredAttributes });
   }, []);
 
   const reset = useCallback(() => {
@@ -74,7 +76,7 @@ export function useSignIn() {
       if (result.status === "signedIn") return show("credentials", "");
       if (result.status === "confirmationRequired") chosen.current = password;
       else challenge.current = result;
-      show(result.status, address);
+      show(result.status, address, result.status === "newPasswordRequired" ? result.requiredAttributes : []);
     },
     [show],
   );
@@ -149,7 +151,8 @@ export function useSignIn() {
       [client, track],
     ),
     completeNewPassword: useCallback(
-      (password: string) => answer("newPasswordRequired", (step) => step.completeNewPassword(password)),
+      (password: string, attributes?: Record<string, string>) =>
+        answer("newPasswordRequired", (step) => step.completeNewPassword(password, attributes)),
       [answer],
     ),
     submitTotp: useCallback(

@@ -33,11 +33,19 @@ client.subscribe((event) => {
 | `endpoint` | Local Cognito simulator; switches to `USER_PASSWORD_AUTH` and turns providers off | AWS, with SRP |
 | `storagePrefix` | Prefix of browser storage keys | `cardea.auth.` |
 | `callbackPath`, `logoutPath` | Paths registered on the app client | `/auth/callback`, `/` |
-| `scopes` | OAuth scopes | `openid email` |
+| `scopes` | OAuth scopes; must include `openid` and `email` | `openid email` |
 | `userIdClaim` | ID token claim holding the product's user id | `sub` |
 | `importSession` | Where the app's earlier code kept its session ([below](#keeping-people-signed-in-on-adoption)) | nothing is imported |
 
 A missing or malformed setting throws `CardeaError("not-configured")`.
+
+The pool must also meet these:
+
+- **Refresh token rotation is off** on the app client. Password sessions refresh
+  with `REFRESH_TOKEN_AUTH`, which Cognito refuses when rotation is on.
+- **Managed login**, if Google should always show its account chooser. The
+  client sends `prompt=select_account`, which Cognito's classic hosted UI does
+  not support.
 
 Without React, call `await client.start()` once per page load. It restores the
 session, or finishes a provider sign-in on the callback path and returns
@@ -48,7 +56,10 @@ it before asking for tokens. `CardeaProvider` does this for you.
 
 ```ts
 const result = await client.signIn(email, password);
-if (result.status === "newPasswordRequired") await result.completeNewPassword(next);
+if (result.status === "newPasswordRequired") {
+  // `requiredAttributes` names any profile fields the account still lacks.
+  await result.completeNewPassword(next, { given_name });
+}
 if (result.status === "totpRequired") await result.submitTotp(code);
 if (result.status === "confirmationRequired") await client.confirmSignUp(result.email, code);
 
@@ -60,7 +71,8 @@ client.signOut();
 ```
 
 A challenge result can itself lead to another challenge, so handle the value
-each continuation returns. Errors from Cognito arrive unchanged; read their
+each continuation returns. A sign-in under way is abandoned
+(`session-superseded`) if anyone signs in or out first, in this tab or another. Errors from Cognito arrive unchanged; read their
 name with `authErrorCode`. This package's own failures are `CardeaError`, with
 a fixed message per `code`.
 
@@ -68,7 +80,8 @@ Addresses are trimmed and otherwise sent as typed.
 
 ## Sessions
 
-One record in `localStorage`, keyed by pool issuer and client id.
+One session record in `localStorage`, keyed by pool issuer and client id, beside
+a mark that changes with each sign-in and sign-out.
 `getIdToken()` and `getAccessToken()` refresh it when it is within a minute of
 expiry. Callers in a tab share one request. A response that arrives after a
 sign-out or an account change is discarded, and a caller never receives another

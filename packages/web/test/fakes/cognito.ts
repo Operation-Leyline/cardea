@@ -15,6 +15,7 @@ export const CONFIG = {
 
 export const ISSUER = `https://cognito-idp.us-east-1.amazonaws.com/${CONFIG.userPoolId}`;
 export const SESSION_KEY = `cardea.auth.session.${ISSUER}.${CONFIG.clientId}`;
+export const GENERATION_KEY = `cardea.auth.generation.${ISSUER}.${CONFIG.clientId}`;
 export const ATTEMPT_KEY = `cardea.auth.attempt.${ISSUER}.${CONFIG.clientId}`;
 
 const signing = await generateKeyPair("RS256");

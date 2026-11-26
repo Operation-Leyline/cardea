@@ -28,6 +28,9 @@ export function googleProofSource(button: Record<string, unknown> = {}): ProofSo
       const google = library();
       if (!google || !container) return Promise.reject(new CardeaError("proof-failed"));
       if (signal.aborted) return Promise.reject(signal.reason);
+      // Google draws in an element of our own, so removing it leaves the caller's content alone.
+      const host = document.createElement("div");
+      container.append(host);
       const credential = new Promise<string>((resolve, reject) => {
         google.initialize({
           client_id: clientId,
@@ -40,9 +43,9 @@ export function googleProofSource(button: Record<string, unknown> = {}): ProofSo
               ? resolve(response.credential)
               : reject(new CardeaError("proof-failed")),
         });
-        google.renderButton(container, { type: "standard", text: "continue_with", ...button });
+        google.renderButton(host, { type: "standard", text: "continue_with", ...button });
       });
-      return abortable(signal, credential).finally(() => container.replaceChildren());
+      return abortable(signal, credential).finally(() => host.remove());
     },
   };
 }

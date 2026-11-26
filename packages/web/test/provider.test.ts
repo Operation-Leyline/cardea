@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCardeaClient, safeReturnPath, type ClientOptions, type Provider } from "../src/index.js";
-import { ATTEMPT_KEY, CONFIG, installFakeCognito, issueTokens, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
+import { ATTEMPT_KEY, authenticationResult, CONFIG, installFakeCognito, issueTokens, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
 
 const RETURN = "/invitations/org/invite?token=synthetic#accept";
 
@@ -193,15 +193,39 @@ describe("coming back", () => {
     expect(localStorage.length).toBe(0);
   });
 
-  it("yields to another tab that signed in during the exchange", async () => {
+  it.each([
+    ["signed out", null],
+    ["signed in", "grace"],
+  ])("yields to another tab that %s during the exchange", async (_name, subject) => {
     const { cognito, query, nonce } = await leave();
-    const other = await storedSession({ subject: "grace" });
+    localStorage.setItem(SESSION_KEY, await storedSession({ subject: "grace" }));
+    const other = createCardeaClient(CONFIG, { redirect: () => {} });
+    cognito.operations.RespondToAuthChallenge = async () =>
+      authenticationResult(await issueTokens({ subject: "grace" }));
     cognito.onToken(async () => {
-      localStorage.setItem(SESSION_KEY, other);
+      if (subject) await other.signIn("grace@example.test", "Correct-Horse-12");
+      else other.signOut();
       return Response.json(await issueTokens({ nonce }));
     });
-    await expect(comeBack(query).result).resolves.toMatchObject({ error: { code: "session-superseded" } });
-    expect(localStorage.getItem(SESSION_KEY)).toBe(other);
+    await expect(comeBack(query).result).resolves.toMatchObject({
+      returnTo: RETURN,
+      error: { code: "session-superseded" },
+    });
+    expect(other.currentSession()?.subject ?? null).toBe(subject);
+  });
+
+  it("completes although another tab refreshed the previous session meanwhile", async () => {
+    const { cognito, query, nonce } = await leave();
+    localStorage.setItem(SESSION_KEY, await storedSession({ subject: "grace", expiresIn: -10 }));
+    const other = createCardeaClient(CONFIG);
+    cognito.onToken(async () => {
+      await other.getIdToken();
+      return Response.json(await issueTokens({ nonce }));
+    });
+    const { client, result } = comeBack(query);
+    await expect(result).resolves.toEqual({ returnTo: RETURN });
+    expect(cognito.operationNames()).toEqual(["InitiateAuth"]);
+    expect(client.currentSession()?.subject).toBe("ada");
   });
 
   it("goes home without an error when the emptied callback page is reloaded", async () => {
