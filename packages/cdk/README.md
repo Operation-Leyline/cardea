@@ -53,6 +53,28 @@ triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', identity.emailKey!.keyArn);
 [`examples/app.ts`](examples/app.ts) is a complete app;
 `pnpm synth:example` synthesizes it without AWS credentials.
 
+### Trigger functions in another stack
+
+The example above works when the functions are in the pool's stack. If they are
+in another one, the pool's stack depends on theirs, so they cannot read
+`identity.directory.tableName`, `identity.emailKey.keyArn` or any other value
+from the construct: CDK reports a cyclic reference. Give them values their own
+stack already knows:
+
+```ts
+// In the functions' stack.
+const emailKey = new kms.Key(this, 'EmailCodeKey', { enableKeyRotation: true });
+triggers.addEnvironment('IDENTITIES_TABLE', 'example-identities');
+triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', emailKey.keyArn);
+
+// In the pool's stack.
+new IdentityPool(this, 'Identity', {
+  triggers: { handler: triggers, customEmailSender: { key: emailKey } },
+  directory: { tableName: 'example-identities' }, // the same literal name
+  // …
+});
+```
+
 ### Settings
 
 | Property | Default | Meaning |
@@ -66,6 +88,7 @@ triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', identity.emailKey!.keyArn);
 | `domainPrefix` | `{account}-{region}` | Cognito-hosted login prefix |
 | `brandedDomain` | none | `{ domainName, hostedZone, active, certificate? }` |
 | `directory` | new table | `{ tableName?, replicaRegions? }`, or `{ table }` to use an existing one |
+| `logicalIds` | CDK's | Logical ids of resources the stack already has; see [Adopting an existing pool](#adopting-an-existing-pool) |
 | `ssmPrefix` | none | Publishes `user-pool-id`, `web-client-id`, `dev-web-client-id`, `login-domain`, `identities-table` |
 | `deletionProtection` | `true` | Pool deletion protection |
 | `removalPolicy` | `RETAIN` | Pool, new directory table and new email key |
@@ -74,6 +97,23 @@ triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', identity.emailKey!.keyArn);
 The construct exposes `userPool`, `webClient`, `devClient`, `prefixDomain`,
 `brandedDomain`, `loginUrl`, `redirectUris`, `directory` and `emailKey`.
 
+### Your API service
+
+The sign-in method operations (list, link, unlink) run in your API service,
+not in the trigger:
+
+```ts
+identity.grantSignInMethods(apiFunction);
+```
+
+It grants `cognito-idp:AdminGetUser`, `AdminLinkProviderForUser` and
+`AdminDisableProviderForUser` on this pool, and read and write on the directory
+table. It refuses a trigger function or its role.
+
+The grant makes the service depend on the pool. If your trigger functions are
+in another stack than the pool, keep the API service out of that stack, or the
+two stacks depend on each other.
+
 ### What you still grant
 
 The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,
@@ -81,13 +121,37 @@ The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,
 write on the directory table, and, when it is also the email sender,
 `kms:Decrypt` on the email key. A separate sender function gets only the
 decrypt. Everything else is yours: your product's tables, the mail budget
-table, sending mail, and what your API needs for sign-in methods and linking.
+table, sending mail, and your API's own permissions beyond
+`grantSignInMethods`.
 
 Do not give a trigger function the pool's id or ARN through
 `addEnvironment`, `addToRolePolicy` or a `grant*` call: the pool depends on
 the function, so that is a cycle CloudFormation refuses. The handler gets the
 pool id in each event. If a trigger function needs another pool permission,
 put it in its own `iam.Policy` attached to the function's role.
+
+## Open the directory
+
+The construct creates an empty table, and the Cardea handler refuses sign-ups,
+provider sign-ins and the provisioning of new accounts until the table holds
+its readiness marker. Write it once, after the first deploy, with credentials
+for the pool's account and region:
+
+```bash
+aws dynamodb put-item --table-name "$IDENTITIES_TABLE" \
+  --item '{"identityKey":{"S":"SYSTEM#READY"},"version":{"N":"1"}}' \
+  --condition-expression 'attribute_not_exists(identityKey)'
+```
+
+`$IDENTITIES_TABLE` is `identity.directory.tableName` (published as
+`identities-table` under `ssmPrefix`). The command fails if the marker is
+already there, which changes nothing.
+
+**Only do this for a pool with no users.** A pool that has users needs an
+ownership row (`EMAIL#…`) for each of them in the table first; with the marker
+alone, their mailboxes look unclaimed. Cardea ships no backfill tool. The
+construct does not write the marker, because it cannot know whether the pool is
+empty. A table that is already in use, such as Leyline's, has its marker.
 
 ## Domains
 
@@ -167,21 +231,111 @@ CloudFormation reads a secret when it creates or updates the provider.
 Changing only the secret's value does not update Cognito: after rotating,
 update the provider too.
 
-## Moving a live pool onto the construct
+## Adopting an existing pool
 
-The construct's CloudFormation logical ids differ from those of hand-written
-stacks. A changed id means a **new** pool or table. Before the first deploy:
+A stack that already has a pool can move onto the construct and keep it. Done
+wrong, CloudFormation swaps in a new pool or table with nothing in it, or the
+deploy fails because Cognito cannot make a change. Check
+[the settings that can never change](#3-settings-that-can-never-change) first.
 
-1. Give each existing resource its current id, for example
-   `(identity.userPool.node.defaultChild as cognito.CfnUserPool).overrideLogicalId('…')`,
-   and the same for domains, providers and clients.
-2. Pass a table another stack owns as `directory: { table }`.
-3. Read `cdk diff`. Do not deploy if it replaces or removes the pool, a
-   client, a domain or a table.
+The construct must be in the stack that holds the resources now: a logical id
+only means something inside one stack.
 
-The pool declares `email` as mutable, which Cognito requires of a mapped
-provider attribute. Cognito cannot change this on an existing pool, so a pool
-created with an immutable `email` cannot be moved onto this construct as it is.
+### 1. Pass the existing logical ids
+
+Read them from the deployed stack
+(`aws cloudformation list-stack-resources --stack-name <stack>`):
+
+```ts
+new IdentityPool(this, 'Identity', {
+  // …settings that match what is deployed
+  logicalIds: {
+    pool: 'Users…', // the whole id, as CloudFormation lists it
+    webClient: 'UsersWebClient…',
+    devClient: 'UsersDevWebClient…',
+    prefixDomain: 'UsersLoginDomain…',
+    brandedDomain: 'UsersBrandedLogin…',
+    google: 'Google…',
+    apple: 'Apple…',
+    directory: 'Identities…',
+    emailKey: 'EmailCodeKey…',
+  },
+});
+```
+
+Pass an id for each of these that the stack already has. Naming a resource the
+construct does not create (a dev client without `devClient`, say) is an error.
+
+- **Domains.** `domainPrefix` and `brandedDomain.domainName` must equal what is
+  deployed; a different name replaces the domain.
+- **Clients.** The construct's clients have no secret. A client deployed with
+  one would be replaced.
+- **Directory table.** The simplest way is to keep the table's definition as it
+  is and pass it as `directory: { table }`; then leave `logicalIds.directory`
+  out. Do that if another stack owns the table, if it was deployed as
+  `AWS::DynamoDB::Table` (the construct creates `AWS::DynamoDB::GlobalTable`,
+  and CloudFormation cannot change a resource's type), or if it has settings
+  the construct does not make, such as deletion protection or a stream. To hand
+  it to the construct instead, pass `logicalIds.directory`, with
+  `directory.tableName` and `directory.replicaRegions` as deployed.
+  A pool with users that has no directory table yet needs one filled first; see
+  [Open the directory](#open-the-directory).
+- **Email key.** A key you pass as `customEmailSender.key` stays yours, so it
+  takes no `logicalIds.emailKey`.
+- **Other named resources.** A branded domain's alias record and the SSM
+  parameters have fixed names, so creating one under a new id fails while the
+  old one exists. Give them, and the certificate, their old ids too:
+
+  ```ts
+  const override = (child: string, id: string) =>
+    (identity.node.findChild(child).node.defaultChild as CfnResource).overrideLogicalId(id);
+  override('LoginAlias', 'LoginAlias…');
+  override('LoginCertificate', 'LoginCertificate…');
+  override('Parameter-user-pool-id', 'UserPoolIdParam…'); // one per published name
+  ```
+
+  Or leave `ssmPrefix` unset and keep publishing the parameters yourself.
+
+### 2. Run `cdk diff`, and refuse any replacement
+
+Run `cdk diff` against the deployed stack before the first deploy.
+
+**Do not deploy if the pool, the table or a domain shows `replace` (or "may be
+replaced").** Refuse the same for a client, whose id your apps hold, a
+provider and the email key.
+
+A wrong or missing logical id does not show as `replace`. It shows as one
+resource removed (orphaned, when it is retained) and another added. Refuse that
+for the same resources. The Lambda invoke permissions and the trigger's IAM
+policy do get new ids, and that is expected.
+
+Read the changed properties too. The deploy removes or overwrites settings your
+resources have and the construct does not make, such as names, tags or message
+wording; set those again on the resource (`node.defaultChild`). Match the
+options your clients rely on: Leyline's need `adminPasswordSignIn: true`. The
+construct's clients and Google provider also ask for the `profile` scope.
+
+### 3. Settings that can never change
+
+Cognito fixes these once a pool or attribute exists. Do not count on `cdk diff`
+to flag them: CloudFormation documents some as updatable without interruption,
+but Cognito's update operation does not accept them.
+
+| Setting | The construct declares | If your pool differs |
+|---|---|---|
+| Sign-in aliases (`UsernameAttributes`, `AliasAttributes`) | email as the username, no aliases | **New pool** |
+| Attribute mutability | `email` mutable; `name`, which providers also map, left at its mutable default | **New pool** if `email` or `name` is immutable: Cognito must be able to update a mapped attribute at each provider sign-in |
+| Required attributes | `email` only | **New pool** |
+| Custom attributes schema | only what you pass in `customAttributes` | Declare each one exactly as deployed. None can be removed, renamed, retyped or change mutability; new ones can be added |
+| Username case sensitivity (`UsernameConfiguration`) | not set | If the deployed template sets it, set the same value on `userPool.node.defaultChild` |
+
+A new pool means moving the users to it. For example, a pool created with an
+immutable `email` cannot be adopted.
+
+Sources: [user pool attributes](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html),
+[attribute mapping](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-specifying-attribute-mapping.html),
+[`UsernameConfiguration`](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cognito-userpool.html#cfn-cognito-userpool-usernameconfiguration),
+and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_UpdateUserPool.html).
 
 ## Settings to reproduce without CDK (Yoru, SST/Pulumi)
 
@@ -218,6 +372,8 @@ created with an immutable `email` cannot be moved onto this construct as it is.
 
 - Partition key `identityKey` (string), no sort key; on-demand billing; TTL
   attribute `expiresAt`; point-in-time recovery; retained.
+- The readiness marker, written once as in
+  [Open the directory](#open-the-directory).
 
 **Providers**
 

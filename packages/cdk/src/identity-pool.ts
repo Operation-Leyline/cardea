@@ -1,13 +1,17 @@
 import { Stack } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 import { addBrowserClient, addDevClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
 import { addBrandedDomain, BrandedDomainProps } from './domains';
+import { LogicalIds, overrideLogicalIds } from './logical-ids';
 import { publishIds } from './parameters';
-import { addApple, addGoogle, ConfiguredProvider, ProviderSecretProps } from './providers';
+import { addApple, addGoogle, ProviderSecretProps } from './providers';
+import { grantSignInMethods } from './sign-in-methods';
 import { emailSender, grantTriggers, lambdaTriggers, TriggerProps, wireInboundFederation } from './triggers';
 import { createUserPool, UserPoolSettings } from './user-pool';
 
@@ -39,6 +43,8 @@ export interface IdentityPoolProps extends UserPoolSettings {
   readonly directory?: DirectoryProps;
   /** Publish the ids to SSM under this prefix, like `/product/auth`. Default: publish nothing. */
   readonly ssmPrefix?: string;
+  /** Logical ids of resources a stack already has. See "Adopting an existing pool" in the README. */
+  readonly logicalIds?: LogicalIds;
 }
 
 /**
@@ -59,12 +65,14 @@ export class IdentityPool extends Construct {
   public readonly directory: dynamodb.ITable;
   /** Set when there is a custom email sender; its function needs this key's ARN to decrypt. */
   public readonly emailKey?: kms.IKey;
+  private readonly triggerFunctions: lambda.IFunction[];
 
   constructor(scope: Construct, id: string, props: IdentityPoolProps) {
     super(scope, id);
     const { handler } = props.triggers;
     const sender = emailSender(this, props.triggers, props.removalPolicy);
     this.emailKey = sender?.key;
+    this.triggerFunctions = sender ? [handler, sender.handler] : [handler];
 
     this.userPool = createUserPool(this, props, lambdaTriggers(handler, sender));
     wireInboundFederation(this.userPool, handler);
@@ -83,12 +91,25 @@ export class IdentityPool extends Construct {
       .filter((domain) => domain !== undefined)
       .map((domain) => `${domain.baseUrl()}/oauth2/idpresponse`);
 
-    const providers: ConfiguredProvider[] = [];
-    if (props.google) providers.push(addGoogle(this, this.userPool, props.google));
-    if (props.apple) providers.push(addApple(this, this.userPool, props.apple));
+    const google = props.google && addGoogle(this, this.userPool, props.google);
+    const apple = props.apple && addApple(this, this.userPool, props.apple);
+    const providers = [google, apple].filter((provider) => provider !== undefined);
     const clients = { providers, adminPasswordSignIn: props.adminPasswordSignIn };
     this.webClient = addBrowserClient(this.userPool, 'WebClient', props.webClient, clients);
     this.devClient = props.devClient && addDevClient(this.userPool, props.devClient, clients);
+
+    overrideLogicalIds(props.logicalIds ?? {}, {
+      pool: this.userPool,
+      webClient: this.webClient,
+      devClient: this.devClient,
+      prefixDomain: this.prefixDomain,
+      brandedDomain: this.brandedDomain,
+      google: google?.resource,
+      apple: apple?.resource,
+      // A table or key passed in belongs to whoever defined it.
+      directory: props.directory?.table ? undefined : this.directory,
+      emailKey: props.triggers.customEmailSender?.key ? undefined : sender?.key,
+    });
 
     if (props.ssmPrefix !== undefined) {
       publishIds(this, props.ssmPrefix, {
@@ -99,5 +120,14 @@ export class IdentityPool extends Construct {
         'identities-table': this.directory.tableName,
       });
     }
+  }
+
+  /**
+   * Grant the product's API service what the sign-in method operations need:
+   * `AdminGetUser`, `AdminLinkProviderForUser` and `AdminDisableProviderForUser`
+   * on this pool, and read and write on the directory table.
+   */
+  grantSignInMethods(grantee: iam.IGrantable): void {
+    grantSignInMethods(grantee, this.userPool, this.directory, this.triggerFunctions);
   }
 }

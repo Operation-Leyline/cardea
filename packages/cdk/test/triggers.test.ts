@@ -1,6 +1,7 @@
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { describe, expect, it } from 'vitest';
 import { IdentityPool } from '../src';
@@ -109,6 +110,42 @@ describe('triggers', () => {
       triggers: { handler: fn(functions), customEmailSender: { handler: fn(functions, 'Sender') } },
       webClient,
     });
+    expect(() => app.synth()).not.toThrow();
+    expect(auth.dependencies).toContain(functions);
+    expect(functions.dependencies).not.toContain(auth);
+  });
+
+  it.each(['table name', 'key ARN'])('cannot hand a function in another stack the generated %s', (value) => {
+    const app = new App();
+    const functions = new Stack(app, 'Functions', { env });
+    const auth = new Stack(app, 'Auth', { env });
+    const handler = fn(functions);
+    const identity = new IdentityPool(auth, 'Identity', {
+      triggers: { handler, customEmailSender: {} },
+      webClient,
+    });
+    expect(() => {
+      handler.addEnvironment(
+        'VALUE',
+        value === 'table name' ? identity.directory.tableName : identity.emailKey!.keyArn,
+      );
+      app.synth();
+    }).toThrow(/cyclic reference/);
+  });
+
+  it('configures a function in another stack with a literal table name and its own key', () => {
+    const app = new App();
+    const functions = new Stack(app, 'Functions', { env });
+    const auth = new Stack(app, 'Auth', { env });
+    const handler = fn(functions);
+    const key = new kms.Key(functions, 'EmailCodeKey', { enableKeyRotation: true });
+    new IdentityPool(auth, 'Identity', {
+      triggers: { handler, customEmailSender: { key } },
+      directory: { tableName: 'example-identities' },
+      webClient,
+    });
+    handler.addEnvironment('IDENTITIES_TABLE', 'example-identities');
+    handler.addEnvironment('COGNITO_EMAIL_KEY_ARN', key.keyArn);
     expect(() => app.synth()).not.toThrow();
     expect(auth.dependencies).toContain(functions);
     expect(functions.dependencies).not.toContain(auth);
