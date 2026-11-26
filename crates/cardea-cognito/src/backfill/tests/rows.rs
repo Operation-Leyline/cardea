@@ -145,6 +145,29 @@ async fn a_linked_identitys_own_profile_is_not_a_second_user() {
     }
 }
 
+/// The pool's links changed between two runs. The list keeps what it held,
+/// which is how erasure still finds the old binding.
+#[tokio::test]
+async fn an_identity_the_users_list_lacks_is_appended_with_its_binding() {
+    let f = closed().await;
+    user(&f, "alice", "CONFIRMED");
+    f.pool_link("alice", GOOGLE, "google-1");
+    assert_eq!(run(&f, Mode::Apply).await.written, counts(1, 1, 1));
+    change(&f, "alice", |account| account.identities.clear());
+    f.pool_link("alice", APPLE, "apple-1");
+
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::Activated);
+    assert_eq!(report.written, counts(0, 1, 0));
+    assert!(present(&f, "PROVIDER#Google#google-1").await);
+    assert!(present(&f, "PROVIDER#SignInWithApple#apple-1").await);
+    let list = f.item("METHODS#sub-of-alice").await.unwrap();
+    assert_eq!(list["version"].as_n().unwrap(), "2");
+    let identities = list["identities"].as_s().unwrap();
+    assert!(identities.contains("google-1") && identities.contains("apple-1"));
+}
+
 /// A case-sensitive pool can hold users whose names differ only in case from a
 /// linked identity's profile.
 #[tokio::test]

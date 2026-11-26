@@ -1,4 +1,6 @@
-//! The backfill's only writes, each on the condition that its key is free.
+//! The backfill's only writes: new rows, each on the condition that its key is
+//! free, and identities appended to a list, on the condition that it has not
+//! changed.
 
 use aws_sdk_dynamodb::error::ProvideErrorMetadata;
 use cardea_core::Error;
@@ -7,7 +9,8 @@ use tabulary::{FailureKind, MemberOf, WriteError};
 use super::{BackfillError, RowCounts, survey::Missing};
 use crate::{
     directory::AwsDirectory,
-    record::{IdentityTable, ReadyRow, ReadyRowKey},
+    methods::row::Identity,
+    record::{IdentityTable, ProviderRow, ReadyRow, ReadyRowKey},
 };
 
 /// The directory version an open table holds.
@@ -37,13 +40,15 @@ impl AwsDirectory {
     }
 
     /// Write each row whose key is still free, and count those written. A key
-    /// taken meanwhile is left for the second pass to judge.
+    /// taken, or a list changed, meanwhile is left for the second pass to
+    /// judge.
     pub(super) async fn write_missing(&self, rows: &[Missing]) -> Result<RowCounts, BackfillError> {
         let mut written = RowCounts::default();
         for row in rows {
             let created = match row {
                 Missing::Claim(row) => self.create(row).await?,
                 Missing::Binding(row) => self.create(row).await?,
+                Missing::Unlisted(identity, row) => self.append(identity, row).await?,
                 Missing::List(row) => self.create(row).await?,
             };
             if created {
@@ -51,6 +56,24 @@ impl AwsDirectory {
             }
         }
         Ok(written)
+    }
+
+    /// Create `binding` and put its identity on the user's list in one
+    /// transaction, as a link does. No entry already there is touched. `false`
+    /// when nothing was written.
+    async fn append(
+        &self,
+        identity: &Identity,
+        binding: &ProviderRow,
+    ) -> Result<bool, BackfillError> {
+        let Some(mut list) = self.methods_row(&binding.record).await? else {
+            return Ok(false);
+        };
+        let version = list.version;
+        list.entry(identity);
+        Ok(self
+            .replace_methods_row_binding(version, list, binding)
+            .await?)
     }
 
     /// Put `row` unless its key holds one: `false` when it does.

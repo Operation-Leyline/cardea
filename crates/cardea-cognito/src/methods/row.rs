@@ -103,7 +103,7 @@ impl AwsDirectory {
     /// [`AwsDirectory::replace_methods_row`] and the creation of `binding`, as
     /// one transaction. `false` when it was refused or not answered: the caller
     /// reads both rows again to learn which.
-    pub(super) async fn replace_methods_row_binding(
+    pub(crate) async fn replace_methods_row_binding(
         &self,
         read: i64,
         mut next: MethodsRow,

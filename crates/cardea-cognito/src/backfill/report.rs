@@ -106,12 +106,9 @@ pub enum Problem {
         /// Whose identity.
         provider: Provider,
     },
-    /// The user's list lacks an identity the pool links, which has no binding.
-    /// None was written, as no list would lead to it.
-    UnlistedIdentity {
-        /// Whose identity.
-        provider: Provider,
-    },
+    /// The directory is open, so was only read, and rows of this user's are
+    /// absent.
+    RowsMissing,
     /// A row of this user's does not decode.
     UnreadableRow {
         /// Which row.
@@ -178,11 +175,7 @@ impl fmt::Display for Problem {
                 "has a {} binding with an outdated username or address",
                 name(provider)
             ),
-            Self::UnlistedIdentity { provider } => write!(
-                f,
-                "links a {} identity their METHODS# list lacks; delete that row and run again",
-                name(provider)
-            ),
+            Self::RowsMissing => f.write_str("lacks directory rows"),
             Self::UnreadableRow { row } => {
                 let row = match row {
                     RowKind::Email => "mailbox row",

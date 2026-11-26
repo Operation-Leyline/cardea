@@ -61,6 +61,7 @@ async fn an_open_directory_is_only_read() {
 
     assert_eq!(report.outcome, Outcome::AlreadyActive);
     assert_eq!(report.missing, counts(1, 0, 0));
+    assert_eq!(report.findings, [finding("alice", Problem::RowsMissing)]);
     assert!(report.needs_attention());
     assert_eq!(table_size(&f).await, 1);
 }

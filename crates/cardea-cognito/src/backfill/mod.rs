@@ -11,9 +11,11 @@
 //! - a `PROVIDER#` binding for each identity the pool links onto them, and a
 //!   `METHODS#` row listing those identities.
 //!
-//! It never overwrites a row and never chooses between claimants. Whatever it
-//! cannot write is a [`Finding`] for an operator, and the directory is not
-//! opened while a blocking one remains.
+//! It never overwrites what a row holds and never chooses between claimants.
+//! The one change to a row already there: a list that lacks an identity gets it
+//! appended, together with its binding. Whatever it cannot write is a
+//! [`Finding`] for an operator, and the directory is not opened while a blocking
+//! one remains.
 //!
 //! Run it after the Cardea triggers are deployed, which refuse new accounts
 //! until the directory is open, so that none can appear outside it. Cognito's
@@ -70,13 +72,14 @@ pub enum BackfillError {
 /// Backfill the directory of `directory`'s pool.
 ///
 /// An open directory is only read, whatever `mode` says: its triggers write
-/// rows themselves, so the report is all a run has to add.
+/// rows themselves, so the report is all a run has to add. It names each user
+/// with rows absent.
 pub async fn backfill(
     directory: &AwsDirectory,
     mode: Mode,
 ) -> Result<BackfillReport, BackfillError> {
     let open = directory.is_open().await?;
-    let first = directory.survey().await?;
+    let first = directory.survey(open).await?;
     if open || mode == Mode::DryRun {
         let outcome = if open {
             Outcome::AlreadyActive
@@ -87,7 +90,7 @@ pub async fn backfill(
     }
     let written = directory.write_missing(&first.missing).await?;
     // The second pass: the pool listed again and every row read back.
-    let mut report = directory.survey().await?.into_report(Outcome::Applied);
+    let mut report = directory.survey(false).await?.into_report(Outcome::Applied);
     report.present = first.present;
     report.written = written;
     if mode == Mode::ApplyAndActivate {

@@ -255,7 +255,7 @@ the user; the library never does.
   left.
 - **Repeats.** After any failure, run the steps again from the start, treating a
   user already gone as deleted. The product keeps the user's id, username and
-  email until step 4 succeeds; the plan need not be kept, because step 2 wrote
+  email until step 5 succeeds; the plan need not be kept, because step 2 wrote
   what it learned into the rows, and `METHODS#` goes last.
 - **Late writes.** A link request that passed the pool check before the
   deletion can commit after step 4. Its one transaction writes `METHODS#` with
@@ -324,25 +324,27 @@ the user it is linked to; that is the same person, and is passed over):
 | `METHODS#{userId}` | one per user with linked identities, addresses null |
 
 - **Dry run by default.** `--apply` writes; `--activate` needs `--apply`.
-- **Never overwrites.** Each write is conditional on the key being free. A row
-  already there that is the user's counts as covered; a mailbox row only if its
-  username is the pool's or the user's address, which is what a sign-in can
-  follow: the pool's username, the user's address, or another alias that
-  `AdminGetUser` resolves to them. A user's list is written before their
-  bindings, and an identity a list already there lacks gets no binding.
+- **Never overwrites.** A new row is conditional on its key being free. A row
+  already there that is the user's counts as covered; a mailbox row only if a
+  sign-in can follow its username: the pool's username, the user's address, or
+  another alias that `AdminGetUser` resolves to them. A user's list is written
+  before their bindings. The one change to a row already there: a list that
+  lacks one of the user's identities gets it appended in the same transaction as
+  its binding, as a link or a listing would; no entry is changed or removed.
 - **Conflicts are reported, not resolved:** two users on one person key (neither
   gets any row), a mailbox row that is another's or under a username the pool no
-  longer answers to (the user gets no row), a subject bound elsewhere, an
-  identity the user's list lacks, a binding with an outdated username or
-  address, a lapsing claim on a user past confirmation, and a user or row that
-  cannot be read.
+  longer answers to (the user gets no row), a subject bound elsewhere, a
+  binding with an outdated username or address, a lapsing claim on a user past
+  confirmation, and a user or row that cannot be read (an unreadable list also
+  holds back that user's bindings).
 - **Federated-only users** (`google_…`) get their binding pointing at
   themselves, with a note: Cardea signs people in to native users, and such a
   user cannot sign in until the product converts them. Converting after
   activation means erasing the old user's rows (above) first.
 - **Activation.** `--activate` writes `SYSTEM#READY` only after a second pass,
   which lists the pool again, finds every row present and nothing to settle. An
-  open directory is only read.
+  open directory is only read, and the report names each user with rows
+  absent.
 - Reports and errors hold counts and user ids (`sub`), never addresses,
   usernames or provider subjects.
 

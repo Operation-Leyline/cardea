@@ -155,33 +155,6 @@ async fn a_claim_under_another_alias_the_pool_accepts_is_cover() {
     assert_eq!(report.findings, []);
 }
 
-/// A list that lacks an identity is not rewritten, and gets no binding it
-/// would not lead to.
-#[tokio::test]
-async fn an_identity_the_users_list_lacks_gets_no_binding() {
-    let f = closed().await;
-    user(&f, "alice", "CONFIRMED");
-    f.pool_link("alice", GOOGLE, "google-1");
-    assert_eq!(run(&f, Mode::Apply).await.written, counts(1, 1, 1));
-    f.pool_link("alice", APPLE, "apple-1");
-
-    let report = run(&f, Mode::ApplyAndActivate).await;
-
-    assert_eq!(report.outcome, Outcome::ActivationRefused);
-    let provider = APPLE;
-    assert_eq!(
-        report.findings,
-        [finding("alice", Problem::UnlistedIdentity { provider })]
-    );
-    assert!(!present(&f, "PROVIDER#SignInWithApple#apple-1").await);
-
-    f.delete("METHODS#sub-of-alice").await;
-    let report = run(&f, Mode::ApplyAndActivate).await;
-
-    assert_eq!(report.outcome, Outcome::Activated);
-    assert_eq!(report.written, counts(0, 1, 1));
-}
-
 #[tokio::test]
 async fn a_lapsing_claim_of_a_confirmed_user_is_not_cover() {
     let f = closed().await;

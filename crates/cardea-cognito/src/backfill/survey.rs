@@ -22,6 +22,9 @@ use crate::{
 pub(super) enum Missing {
     Claim(EmailRow),
     Binding(ProviderRow),
+    /// A binding for an identity the user's list, already there, lacks: the
+    /// two are written together.
+    Unlisted(Identity, ProviderRow),
     List(MethodsRow),
 }
 
@@ -29,7 +32,7 @@ impl Missing {
     pub(super) fn kind(&self) -> RowKind {
         match self {
             Self::Claim(_) => RowKind::Email,
-            Self::Binding(_) => RowKind::Provider,
+            Self::Binding(_) | Self::Unlisted(..) => RowKind::Provider,
             Self::List(_) => RowKind::Methods,
         }
     }
@@ -168,8 +171,10 @@ fn new_claim(account: &PoolAccount, user: &User, person: String) -> Result<Email
 }
 
 impl AwsDirectory {
-    /// List the pool and read every row its users should have.
-    pub(super) async fn survey(&self) -> Result<Survey, BackfillError> {
+    /// List the pool and read every row its users should have. With
+    /// `name_the_lacking`, each user with a row absent gets a finding, for a
+    /// run that will not write it.
+    pub(super) async fn survey(&self, name_the_lacking: bool) -> Result<Survey, BackfillError> {
         let accounts = self.all_accounts().await?;
         let claimants = Claimants::of(&accounts);
         let mut survey = Survey {
@@ -177,8 +182,15 @@ impl AwsDirectory {
             ..Survey::default()
         };
         for (position, account) in accounts.iter().enumerate() {
+            let before = survey.missing.len();
             self.survey_account(position, account, &claimants, &mut survey)
                 .await?;
+            if name_the_lacking
+                && survey.missing.len() > before
+                && let Some(user_id) = &account.user_id
+            {
+                survey.find(user_id, Problem::RowsMissing);
+            }
         }
         Ok(survey)
     }
@@ -264,7 +276,9 @@ impl AwsDirectory {
             return Ok(());
         }
         // The list first, so that a run that stops leaves no binding without it.
-        let list = self.survey_list(&user, identities, survey).await?;
+        let Some(list) = self.survey_list(&user, identities, survey).await? else {
+            return Ok(());
+        };
         for identity in identities {
             let listed = list.find(identity).is_some();
             self.survey_binding(&user, identity, listed, claimants, survey)
@@ -309,15 +323,18 @@ impl AwsDirectory {
                 let holder = row.record.user_id;
                 survey.find(&user.user_id, Problem::SubjectBound { provider, holder });
             }
-            // No binding that no list would lead to.
-            Ok(None) if !listed => {
-                survey.find(&user.user_id, Problem::UnlistedIdentity { provider });
+            Ok(None) => {
+                let binding = ProviderRow {
+                    provider: ProviderRow::provider_name(provider),
+                    subject: identity.subject.clone(),
+                    record: user.clone(),
+                };
+                survey.missing.push(if listed {
+                    Missing::Binding(binding)
+                } else {
+                    Missing::Unlisted(identity.clone(), binding)
+                });
             }
-            Ok(None) => survey.missing.push(Missing::Binding(ProviderRow {
-                provider: ProviderRow::provider_name(provider),
-                subject: identity.subject.clone(),
-                record: user.clone(),
-            })),
             Err(Error::Conflict) => {
                 let row = RowKind::Provider;
                 survey.find(&user.user_id, Problem::UnreadableRow { row });
@@ -328,19 +345,19 @@ impl AwsDirectory {
     }
 
     /// The list the user has, or will have once this pass's rows are written;
-    /// an empty one if theirs cannot be read. A list already there is left as
-    /// it is: listing, linking and unlinking keep it up to date.
+    /// `None` if theirs cannot be read, and then no binding is written either.
+    /// A list already there only ever gains the identities it lacks.
     async fn survey_list(
         &self,
         user: &User,
         identities: &[Identity],
         survey: &mut Survey,
-    ) -> Result<MethodsRow, BackfillError> {
+    ) -> Result<Option<MethodsRow>, BackfillError> {
         let key = MethodsRowKey::new(user.user_id.clone()).map_err(|_| Error::Invalid)?;
         match self.row::<MethodsRow>(key).await {
             Ok(Some(list)) => {
                 survey.present.add(RowKind::Methods);
-                Ok(list)
+                Ok(Some(list))
             }
             Ok(None) => {
                 let mut list = MethodsRow::empty(user);
@@ -349,12 +366,12 @@ impl AwsDirectory {
                     list.entry(identity);
                 }
                 survey.missing.push(Missing::List(list.clone()));
-                Ok(list)
+                Ok(Some(list))
             }
             Err(Error::Conflict) => {
                 let row = RowKind::Methods;
                 survey.find(&user.user_id, Problem::UnreadableRow { row });
-                Ok(MethodsRow::empty(user))
+                Ok(None)
             }
             Err(error) => Err(error.into()),
         }

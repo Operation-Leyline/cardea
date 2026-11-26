@@ -18,8 +18,8 @@
 //!
 //! After any failure, run the sequence again from the start, treating a user
 //! that is already gone as deleted. Keep the user's id, username and email
-//! until [`erase_user`] succeeds: they are how a repeat finds the rows. The
-//! plan itself need not be kept.
+//! until the last pass (below) has succeeded: they are how a repeat finds the
+//! rows. The plan itself need not be kept.
 //!
 //! The caller needs `GetItem`, `PutItem`, `UpdateItem` and `DeleteItem` on the
 //! directory table and `cognito-idp:AdminGetUser` on the pool, besides what it
