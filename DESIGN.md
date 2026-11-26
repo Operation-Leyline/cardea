@@ -162,6 +162,12 @@ provider identity may then be linked to a different account. Leyline keeps
 its console moves; the generic operations are additions (no breaking
 change).
 
+**Which identities a signed-in person may link** (decided 2026-11-26):
+
+- **Same mailbox.** If the provider's email has the account's person key, the link is allowed. This is Leyline's existing rule.
+- **Apple relay address** (`is_private_email`, `@privaterelay.appleid.com`). The link is allowed to the caller, but only with a fresh sign-in: the session's `auth_time` must be within 10 minutes, or the call fails with `recentSignInRequired` and the web package asks the person to sign in again. The person has proved they hold both the account (the session) and the Apple ID (the nonce-bound proof), and a relay address belongs to nobody else. The fresh sign-in stops a stolen, long-lived session from planting a lasting way back in.
+- **Any other address that differs.** The link is refused, as before. Automatic linking never applies to relay addresses.
+
 API keys can call none of these. Errors stay generic and never reveal
 another account.
 
