@@ -24,6 +24,8 @@ pub(crate) const SUB: &str = "sub-0";
 pub(crate) struct Account {
     pub sub: String,
     pub email: String,
+    /// Another name the pool accepts for the account.
+    pub alias: Option<String>,
     pub status: &'static str,
     /// `(providerName, subject)`.
     pub identities: Vec<(String, String)>,
@@ -39,6 +41,7 @@ impl Account {
         Self {
             sub: sub.into(),
             email: email.into(),
+            alias: None,
             status,
             identities: Vec::new(),
             unverified: false,
@@ -241,11 +244,16 @@ async fn answer(
         return list_users(&mut state, &request);
     }
     let username = request["Username"].as_str().unwrap().to_owned();
-    // A user is found by its username or by its email alias, in any case.
+    // A user is found by its username, its other alias, or its email alias in
+    // any case.
     let found = state
         .users
         .iter()
-        .find(|(name, user)| **name == username || user.email.eq_ignore_ascii_case(&username))
+        .find(|(name, user)| {
+            **name == username
+                || user.alias.as_ref() == Some(&username)
+                || user.email.eq_ignore_ascii_case(&username)
+        })
         .map(|(name, user)| (name.clone(), user.clone()));
     match operation {
         "AdminGetUser" => match found {

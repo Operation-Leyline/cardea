@@ -13,7 +13,7 @@ use super::{
     pool::{PoolAccount, Standing},
 };
 use crate::{
-    directory::{AwsDirectory, now, provider_key},
+    directory::{AwsDirectory, now, provider_key, value_of},
     methods::row::Identity,
     record::{EmailRow, MethodsRow, MethodsRowKey, ProviderRow},
 };
@@ -106,10 +106,13 @@ fn subject_of(identity: &Identity) -> (&'static str, &str) {
 }
 
 /// Whether an existing mailbox row is `account`'s, or why it is not.
+/// `followed` says whether a sign-in that looks the row's username up arrives
+/// at this account.
 fn check_claim(
     row: &EmailRow,
     account: &PoolAccount,
     user: &User,
+    followed: bool,
     claimants: &Claimants<'_>,
 ) -> Result<(), Problem> {
     if let Some(holder) = row.user_id.as_ref().filter(|id| **id != user.user_id) {
@@ -118,10 +121,8 @@ fn check_claim(
         });
     }
     let bound = row.user_id.is_some();
-    // A sign-in looks the row's username up, so it must still reach this
-    // account: the pool's username, or the address, as signup writes it.
-    let claimed = &row.record.username;
-    if *claimed != user.username && !claimed.eq_ignore_ascii_case(&user.email) {
+    if !followed {
+        let claimed = &row.record.username;
         return Err(if bound {
             Problem::StaleClaim
         } else {
@@ -239,13 +240,16 @@ impl AwsDirectory {
         };
         // A user whose mailbox is in question gets no other row either.
         match self.email_row(&user.email).await {
-            Ok(Some(row)) => match check_claim(&row, account, &user, claimants) {
-                Ok(()) => survey.present.add(RowKind::Email),
-                Err(problem) => {
-                    survey.find(&user.user_id, problem);
-                    return Ok(());
+            Ok(Some(row)) => {
+                let followed = self.arrives_at(&row.record.username, &user).await?;
+                match check_claim(&row, account, &user, followed, claimants) {
+                    Ok(()) => survey.present.add(RowKind::Email),
+                    Err(problem) => {
+                        survey.find(&user.user_id, problem);
+                        return Ok(());
+                    }
                 }
-            },
+            }
             Ok(None) => survey
                 .missing
                 .push(Missing::Claim(new_claim(account, &user, person)?)),
@@ -256,21 +260,37 @@ impl AwsDirectory {
             }
             Err(error) => return Err(error.into()),
         }
-        // The list first, so that a run that stops leaves no binding without it.
-        if !identities.is_empty() {
-            self.survey_list(&user, identities, survey).await?;
+        if identities.is_empty() {
+            return Ok(());
         }
+        // The list first, so that a run that stops leaves no binding without it.
+        let list = self.survey_list(&user, identities, survey).await?;
         for identity in identities {
-            self.survey_binding(&user, identity, claimants, survey)
+            let listed = list.find(identity).is_some();
+            self.survey_binding(&user, identity, listed, claimants, survey)
                 .await?;
         }
         Ok(())
+    }
+
+    /// Whether looking `claimed` up in the pool, as a sign-in does, arrives at
+    /// `user`.
+    async fn arrives_at(&self, claimed: &str, user: &User) -> Result<bool, Error> {
+        // The pool's username, or the address, as signup writes it.
+        if claimed == user.username || claimed.eq_ignore_ascii_case(&user.email) {
+            return Ok(true);
+        }
+        // Another alias the pool may accept: ask it.
+        Ok(self.get_user(claimed).await?.is_some_and(|found| {
+            value_of(found.user_attributes(), "sub") == Some(user.user_id.as_str())
+        }))
     }
 
     async fn survey_binding(
         &self,
         user: &User,
         identity: &Identity,
+        listed: bool,
         claimants: &Claimants<'_>,
         survey: &mut Survey,
     ) -> Result<(), BackfillError> {
@@ -289,6 +309,10 @@ impl AwsDirectory {
                 let holder = row.record.user_id;
                 survey.find(&user.user_id, Problem::SubjectBound { provider, holder });
             }
+            // No binding that no list would lead to.
+            Ok(None) if !listed => {
+                survey.find(&user.user_id, Problem::UnlistedIdentity { provider });
+            }
             Ok(None) => survey.missing.push(Missing::Binding(ProviderRow {
                 provider: ProviderRow::provider_name(provider),
                 subject: identity.subject.clone(),
@@ -303,31 +327,36 @@ impl AwsDirectory {
         Ok(())
     }
 
-    /// A list already there is left as it is: listing, linking and unlinking
-    /// keep it up to date.
+    /// The list the user has, or will have once this pass's rows are written;
+    /// an empty one if theirs cannot be read. A list already there is left as
+    /// it is: listing, linking and unlinking keep it up to date.
     async fn survey_list(
         &self,
         user: &User,
         identities: &[Identity],
         survey: &mut Survey,
-    ) -> Result<(), BackfillError> {
+    ) -> Result<MethodsRow, BackfillError> {
         let key = MethodsRowKey::new(user.user_id.clone()).map_err(|_| Error::Invalid)?;
         match self.row::<MethodsRow>(key).await {
-            Ok(Some(_)) => survey.present.add(RowKind::Methods),
+            Ok(Some(list)) => {
+                survey.present.add(RowKind::Methods);
+                Ok(list)
+            }
             Ok(None) => {
                 let mut list = MethodsRow::empty(user);
                 list.version = 1;
                 for identity in identities {
                     list.entry(identity);
                 }
-                survey.missing.push(Missing::List(list));
+                survey.missing.push(Missing::List(list.clone()));
+                Ok(list)
             }
             Err(Error::Conflict) => {
                 let row = RowKind::Methods;
                 survey.find(&user.user_id, Problem::UnreadableRow { row });
+                Ok(MethodsRow::empty(user))
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => Err(error.into()),
         }
-        Ok(())
     }
 }

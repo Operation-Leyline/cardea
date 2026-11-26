@@ -102,20 +102,31 @@ fn profile_name(provider: &str, subject: &str) -> String {
 
 /// Leave out the profiles of linked identities. `ListUsers` shows such a profile
 /// beside the user the identity is linked to; it is that person's sign-in, not
-/// another user. A federated-only user lists only itself, and stays.
+/// another user.
+///
+/// Only a provider's profile (`EXTERNAL_PROVIDER`) is one, named for an
+/// identity another user lists, and listing no identity but such ones. A
+/// native user stays whatever its name, and so does a federated-only user.
 fn without_linked_profiles(mut accounts: Vec<PoolAccount>) -> Vec<PoolAccount> {
-    let linked: HashSet<String> = accounts
+    // What users link besides themselves, and the names of those profiles.
+    let (names, linked): (HashSet<String>, HashSet<(String, String)>) = accounts
         .iter()
         .flat_map(|account| {
             let own = account.username.to_ascii_lowercase();
-            account
+            account.listed.iter().filter_map(move |identity| {
+                let name = profile_name(&identity.0, &identity.1);
+                (name != own).then(|| (name, identity.clone()))
+            })
+        })
+        .unzip();
+    accounts.retain(|account| {
+        !(account.standing == Standing::Federated
+            && names.contains(&account.username.to_ascii_lowercase())
+            && account
                 .listed
                 .iter()
-                .map(|(provider, subject)| profile_name(provider, subject))
-                .filter(move |name| *name != own)
-        })
-        .collect();
-    accounts.retain(|account| !linked.contains(&account.username.to_ascii_lowercase()));
+                .all(|identity| linked.contains(identity)))
+    });
     accounts
 }
 

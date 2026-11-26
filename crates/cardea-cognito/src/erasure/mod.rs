@@ -11,6 +11,11 @@
 //! 3. `AdminDeleteUser`;
 //! 4. [`erase_user`]: delete the rows that still name this user.
 //!
+//! A link request already under way when the user was deleted can still write
+//! after step 4. It writes the user's list with the binding, so running steps 2
+//! and 4 once more, after the longest such a request can run (the function's
+//! timeout), removes both.
+//!
 //! After any failure, run the sequence again from the start, treating a user
 //! that is already gone as deleted. Keep the user's id, username and email
 //! until [`erase_user`] succeeds: they are how a repeat finds the rows. The

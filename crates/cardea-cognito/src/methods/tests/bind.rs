@@ -1,6 +1,10 @@
 //! A binding and its place on the list are one write.
 
 use super::*;
+use crate::{
+    erasure::{erase_user, plan_erasure},
+    record::{MethodsRow, ProviderRow},
+};
 
 async fn claim(f: &Fixture, user: &User, method: Provider, subject: &str) -> Result<(), Error> {
     f.directory.claim_provider(method, subject, user).await
@@ -66,6 +70,41 @@ async fn nothing_is_bound_while_its_unlink_is_unfinished() {
         Err(Error::NotReady)
     );
     assert_eq!(bound(&f, GOOGLE, "google-1").await, None);
+}
+
+/// A link that checked the pool before the deletion can write after the erasure
+/// finished. It writes the list with the binding, so a repeat removes both.
+#[tokio::test]
+async fn a_write_landing_after_erasure_is_removed_by_a_repeat() {
+    let f = fixture().await;
+    let alice = f.account("alice", "Cognito").await;
+    let planned = plan_erasure(&f.directory, &alice).await.unwrap();
+    f.pool.remove("alice");
+    erase_user(&f.directory, &planned).await.unwrap();
+
+    let mut list = MethodsRow::empty(&alice);
+    list.entry(&crate::methods::row::Identity {
+        provider: GOOGLE,
+        subject: "google-1".into(),
+    });
+    let binding = ProviderRow {
+        provider: ProviderRow::provider_name(GOOGLE),
+        subject: "google-1".into(),
+        record: alice.clone(),
+    };
+    assert!(
+        f.directory
+            .replace_methods_row_binding(0, list, &binding)
+            .await
+            .unwrap()
+    );
+
+    let again = plan_erasure(&f.directory, &alice).await.unwrap();
+    let report = erase_user(&f.directory, &again).await.unwrap();
+
+    assert_eq!((report.providers, report.methods), (1, 1));
+    assert_eq!(bound(&f, GOOGLE, "google-1").await, None);
+    assert_eq!(stored(&f, &alice).await, None);
 }
 
 /// A link that stopped after the binding can be removed like any other.

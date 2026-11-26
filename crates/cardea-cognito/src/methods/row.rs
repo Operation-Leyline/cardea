@@ -38,7 +38,7 @@ impl MethodsRow {
             .position(|i| i.provider == provider && i.subject == identity.subject)
     }
 
-    pub(super) fn find(&self, identity: &Identity) -> Option<&LinkedIdentity> {
+    pub(crate) fn find(&self, identity: &Identity) -> Option<&LinkedIdentity> {
         self.position(identity).map(|at| &self.identities[at])
     }
 

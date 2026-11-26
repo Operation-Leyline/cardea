@@ -48,7 +48,7 @@ async fn a_binding_made_after_the_plan_is_erased() {
     assert!(!present(&f, "PROVIDER#Google#google-late").await);
 }
 
-/// With the list gone and the user gone, a straggler binds nothing.
+/// A link that starts once the user is gone binds nothing.
 #[tokio::test]
 async fn nothing_binds_to_an_erased_user() {
     let (f, alice) = linked_account().await;

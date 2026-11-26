@@ -20,8 +20,8 @@
 //! `ListUsers` is eventually consistent, and an open directory is only read: wait
 //! some minutes after the deployment, so that accounts made just before it are
 //! listed. The `cardea-backfill` binary runs it from a terminal. It needs
-//! `cognito-idp:ListUsers` on the pool, and `GetItem` and `PutItem` on the
-//! table.
+//! `cognito-idp:ListUsers` and `AdminGetUser` on the pool, and `GetItem` and
+//! `PutItem` on the table.
 //!
 //! Neither a report nor an error holds an address, a username or a provider
 //! subject: users are named by their `sub`.

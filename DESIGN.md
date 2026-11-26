@@ -245,6 +245,7 @@ the user; the library never does.
 | 2 | `plan_erasure(user)` | reads the `METHODS#` row, the pool user's `identities` and the mailbox's row; records in the directory what only the pool knows: each identity on the list, the pool's address (`erasingMailboxes`) when it reaches another mailbox than the caller's, and `userId` on a mailbox row the pool shows to be this user's |
 | 3 | product | `AdminDeleteUser` |
 | 4 | `erase_user(plan)` | for each identity, deletes the `PROVIDER#` row; deletes the `EMAIL#` row; then deletes `METHODS#` |
+| 5 | product | later, steps 2 and 4 once more (below) |
 
 - **Only this user's rows.** Each delete is conditional on the row naming this
   `userId`. A row someone else holds is left and counted.
@@ -256,6 +257,12 @@ the user; the library never does.
   user already gone as deleted. The product keeps the user's id, username and
   email until step 4 succeeds; the plan need not be kept, because step 2 wrote
   what it learned into the rows, and `METHODS#` goes last.
+- **Late writes.** A link request that passed the pool check before the
+  deletion can commit after step 4. Its one transaction writes `METHODS#` with
+  the binding, so a second pass finds both. Run it after the longest such a
+  request can still be running: the timeout of the product's linking function.
+  Step 4 leaves no marker that would refuse the write, so that nothing of the
+  user stays behind.
 - The report counts rows removed and left. It holds no address.
 - Both steps refuse until the directory is open.
 - `LINK#` challenges and mail budget rows expire on their own.
@@ -306,8 +313,8 @@ them. The rules come from Leyline's `backfill_identity_directory.py`, extended
 to pools that already link providers.
 
 For every user the pool lists (`ListUsers` also shows a linked identity's own
-profile, named `{provider}_{subject}`, beside the user it is linked to; that is
-the same person, and is passed over):
+profile, status `EXTERNAL_PROVIDER` and named `{provider}_{subject}`, beside
+the user it is linked to; that is the same person, and is passed over):
 
 | Row | Written as |
 |---|---|
@@ -320,13 +327,15 @@ the same person, and is passed over):
 - **Never overwrites.** Each write is conditional on the key being free. A row
   already there that is the user's counts as covered; a mailbox row only if its
   username is the pool's or the user's address, which is what a sign-in can
-  follow. A user's list is written before their bindings.
+  follow: the pool's username, the user's address, or another alias that
+  `AdminGetUser` resolves to them. A user's list is written before their
+  bindings, and an identity a list already there lacks gets no binding.
 - **Conflicts are reported, not resolved:** two users on one person key (neither
   gets any row), a mailbox row that is another's or under a username the pool no
-  longer answers to (the user gets no row), a
-  subject bound elsewhere, a binding with an outdated username or address, a
-  lapsing claim on a user past confirmation, and a user or row that cannot be
-  read.
+  longer answers to (the user gets no row), a subject bound elsewhere, an
+  identity the user's list lacks, a binding with an outdated username or
+  address, a lapsing claim on a user past confirmation, and a user or row that
+  cannot be read.
 - **Federated-only users** (`google_…`) get their binding pointing at
   themselves, with a note: Cardea signs people in to native users, and such a
   user cannot sign in until the product converts them. Converting after

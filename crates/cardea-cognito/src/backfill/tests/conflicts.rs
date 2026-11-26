@@ -109,32 +109,77 @@ async fn a_mailbox_held_by_another_claim_is_left_as_it_is() {
     assert_eq!(f.item("EMAIL#alice@example.com").await, before);
 }
 
-/// The row names the user, but a sign-in looks its username up and finds
-/// nobody.
-#[tokio::test]
-async fn a_claim_under_a_username_the_pool_dropped_blocks() {
-    let f = closed().await;
-    let alice = user(&f, "alice", "CONFIRMED");
+/// A mailbox row naming `user`, under `username`.
+async fn claim_under(f: &Fixture, user: &User, username: &str) {
     f.directory
         .put_new(&EmailRow {
             person: "alice@example.com".into(),
             record: EmailOwner {
-                email: "alice+old@example.com".into(),
-                username: "alice+old@example.com".into(),
+                email: user.email.clone(),
+                username: username.into(),
                 origin: "Cognito".into(),
             },
-            user_id: Some(alice.user_id),
+            user_id: Some(user.user_id.clone()),
             unconfirmed_expires_at: None,
             password_initialization: None,
             password_set: None,
         })
         .await
         .unwrap();
+}
+
+/// The row names the user, but a sign-in looks its username up and finds
+/// nobody.
+#[tokio::test]
+async fn a_claim_under_a_username_the_pool_dropped_blocks() {
+    let f = closed().await;
+    let alice = user(&f, "alice", "CONFIRMED");
+    claim_under(&f, &alice, "alice+old@example.com").await;
 
     let report = run(&f, Mode::ApplyAndActivate).await;
 
     assert_eq!(report.outcome, Outcome::ActivationRefused);
     assert_eq!(report.findings, [finding("alice", Problem::StaleClaim)]);
+}
+
+#[tokio::test]
+async fn a_claim_under_another_alias_the_pool_accepts_is_cover() {
+    let f = closed().await;
+    let alice = user(&f, "alice", "CONFIRMED");
+    change(&f, "alice", |account| account.alias = Some("ally".into()));
+    claim_under(&f, &alice, "ally").await;
+
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::Activated);
+    assert_eq!(report.findings, []);
+}
+
+/// A list that lacks an identity is not rewritten, and gets no binding it
+/// would not lead to.
+#[tokio::test]
+async fn an_identity_the_users_list_lacks_gets_no_binding() {
+    let f = closed().await;
+    user(&f, "alice", "CONFIRMED");
+    f.pool_link("alice", GOOGLE, "google-1");
+    assert_eq!(run(&f, Mode::Apply).await.written, counts(1, 1, 1));
+    f.pool_link("alice", APPLE, "apple-1");
+
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::ActivationRefused);
+    let provider = APPLE;
+    assert_eq!(
+        report.findings,
+        [finding("alice", Problem::UnlistedIdentity { provider })]
+    );
+    assert!(!present(&f, "PROVIDER#SignInWithApple#apple-1").await);
+
+    f.delete("METHODS#sub-of-alice").await;
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::Activated);
+    assert_eq!(report.written, counts(0, 1, 1));
 }
 
 #[tokio::test]

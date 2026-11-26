@@ -145,6 +145,36 @@ async fn a_linked_identitys_own_profile_is_not_a_second_user() {
     }
 }
 
+/// A case-sensitive pool can hold users whose names differ only in case from a
+/// linked identity's profile.
+#[tokio::test]
+async fn a_user_that_only_resembles_a_linked_profile_is_kept() {
+    let f = closed().await;
+    user(&f, "alice", "CONFIRMED");
+    f.pool_link("alice", GOOGLE, "google-1");
+    f.pool.add(
+        "GOOGLE_google-1",
+        "sub-of-bob",
+        "bob@example.com",
+        "CONFIRMED",
+    );
+    f.pool.add(
+        "Google_GOOGLE-1",
+        "sub-of-carol",
+        "carol@example.com",
+        "EXTERNAL_PROVIDER",
+    );
+    f.pool_link("Google_GOOGLE-1", GOOGLE, "GOOGLE-1");
+
+    let report = run(&f, Mode::ApplyAndActivate).await;
+
+    assert_eq!(report.outcome, Outcome::Activated);
+    assert_eq!(report.users, 3);
+    assert_eq!(report.findings, [finding("carol", Problem::FederatedOnly)]);
+    assert!(present(&f, "EMAIL#bob@example.com").await);
+    assert!(present(&f, "EMAIL#carol@example.com").await);
+}
+
 #[tokio::test]
 async fn every_page_is_read_and_a_repeat_writes_nothing() {
     let f = closed().await;

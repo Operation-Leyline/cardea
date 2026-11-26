@@ -81,9 +81,9 @@ pub enum Problem {
         /// The user the row names, when it can be told.
         holder: Option<String>,
     },
-    /// The mailbox's row names this user under a username that is neither the
-    /// pool's nor their address, which a sign-in cannot follow. Nothing was
-    /// written for them.
+    /// The mailbox's row names this user under a username that no longer leads
+    /// to them in the pool, so a sign-in cannot follow it. Nothing was written
+    /// for them.
     StaleClaim,
     /// The mailbox's row is this user's unconfirmed claim, which will lapse,
     /// although the user is past confirmation.
@@ -103,6 +103,12 @@ pub enum Problem {
     /// A binding names this user with a username or address the pool no longer
     /// holds, which a sign-in refuses.
     StaleBinding {
+        /// Whose identity.
+        provider: Provider,
+    },
+    /// The user's list lacks an identity the pool links, which has no binding.
+    /// None was written, as no list would lead to it.
+    UnlistedIdentity {
         /// Whose identity.
         provider: Provider,
     },
@@ -170,6 +176,11 @@ impl fmt::Display for Problem {
             Self::StaleBinding { provider } => write!(
                 f,
                 "has a {} binding with an outdated username or address",
+                name(provider)
+            ),
+            Self::UnlistedIdentity { provider } => write!(
+                f,
+                "links a {} identity their METHODS# list lacks; delete that row and run again",
                 name(provider)
             ),
             Self::UnreadableRow { row } => {

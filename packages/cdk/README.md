@@ -154,6 +154,10 @@ the user; your worker does, so grant those yourself:
 identity.userPool.grant(deletionWorker, 'cognito-idp:AdminDisableUser', 'cognito-idp:AdminDeleteUser');
 ```
 
+Plan and erase once more after your linking function's timeout has passed: a
+link request that was under way during the deletion can write after the first
+pass.
+
 `grantErasure` refuses the same grantees as `grantSignInMethods` and takes the
 same `policyInPoolStack` option, for the same layouts. `userPool.grant` puts its
 statements on the role, in the role's stack; where that is a cycle, write them
@@ -311,8 +315,8 @@ cargo run -p cardea-cognito --bin cardea-backfill -- \
   --pool "$USER_POOL_ID" --table "$IDENTITIES_TABLE" --apply --activate
 ```
 
-It needs `cognito-idp:ListUsers` on the pool, and `dynamodb:GetItem` and
-`PutItem` on the table. It prints counts and user ids (`sub`), never addresses.
+It needs `cognito-idp:ListUsers` and `AdminGetUser` on the pool, and
+`dynamodb:GetItem` and `PutItem` on the table. It prints counts and user ids (`sub`), never addresses.
 It exits 0 when done, 1 when it failed and 2 when something is left to settle:
 settle each line under "to settle" and run it again. Read the notes too; a user
 that exists only behind a provider sign-in must be converted to a native user
