@@ -1,17 +1,26 @@
-import { CfnResource, Stack } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Construct, IConstruct } from 'constructs';
+import { Construct } from 'constructs';
 
-/** What the grant is about, and what decides where its statements may go. */
+/** Where the sign-in method grant puts its statements. */
+export interface SignInMethodsGrantOptions {
+  /**
+   * Put the statements in a policy in the pool's stack, attached to the
+   * grantee's role, instead of in a policy in the role's own stack. Needed when
+   * the pool's stack depends on the role's stack, directly or through others.
+   * It makes the pool's stack depend on that stack, so leave it off for a
+   * service in a stack that depends on the pool's. Default: false.
+   */
+  readonly policyInPoolStack?: boolean;
+}
+
+/** The parts of the construct the grant is about. */
 export interface SignInMethodsResources {
   readonly userPool: cognito.UserPool;
   readonly directory: dynamodb.ITable;
   readonly triggerFunctions: lambda.IFunction[];
-  /** Resources the product passed in that the pool's stack refers to. */
-  readonly passedIn: (IConstruct | undefined)[];
 }
 
 /**
@@ -19,12 +28,17 @@ export interface SignInMethodsResources {
  * link, unlink): look up and link or disable a provider on this pool's users,
  * and read and write the directory.
  *
- * Trigger functions are refused: this grant lands in the role's default policy,
- * which a function depends on, so for a trigger it closes the pool and
- * function loop CloudFormation will not deploy. A grantee without a role is
- * refused too, because it would get nothing.
+ * Trigger functions are refused: this grant is for the API service, and in a
+ * trigger role's default policy it would close the pool and function loop
+ * CloudFormation will not deploy. A grantee without a role is refused too,
+ * because it would get nothing.
  */
-export function grantSignInMethods(scope: Construct, grantee: iam.IGrantable, resources: SignInMethodsResources): void {
+export function grantSignInMethods(
+  scope: Construct,
+  grantee: iam.IGrantable,
+  resources: SignInMethodsResources,
+  options: SignInMethodsGrantOptions,
+): void {
   const principal = grantee.grantPrincipal;
   if (resources.triggerFunctions.some((fn) => fn.grantPrincipal === principal)) {
     throw new Error(
@@ -36,7 +50,10 @@ export function grantSignInMethods(scope: Construct, grantee: iam.IGrantable, re
   }
 
   let target = grantee;
-  if (principal instanceof iam.Role && isUpstream(scope, principal, resources.passedIn)) {
+  if (options.policyInPoolStack) {
+    if (!isRole(principal)) {
+      throw new Error('grantSignInMethods: policyInPoolStack needs a grantee with an IAM role');
+    }
     const id = `SignInMethodsPolicy${principal.node.addr}`;
     if (scope.node.tryFindChild(id)) return;
     target = new iam.Policy(scope, id, { roles: [principal] });
@@ -50,17 +67,7 @@ export function grantSignInMethods(scope: Construct, grantee: iam.IGrantable, re
   resources.directory.grantReadWriteData(target);
 }
 
-/**
- * Whether the role is in another stack that the pool's stack already depends
- * on. Statements in that role's own policy would name the pool and make the
- * dependency circular, so they go in a policy in the pool's stack instead. A
- * resource that was only imported into a stack creates no dependency on it.
- */
-function isUpstream(scope: Construct, role: iam.Role, passedIn: (IConstruct | undefined)[]): boolean {
-  const stack = Stack.of(role);
-  if (stack === Stack.of(scope)) return false;
-  return passedIn.some(
-    (resource) =>
-      resource !== undefined && CfnResource.isCfnResource(resource.node.defaultChild) && Stack.of(resource) === stack,
-  );
+/** Defined and imported roles alike; `instanceof iam.Role` would miss the latter. */
+function isRole(principal: iam.IPrincipal): principal is iam.IRole {
+  return 'roleName' in principal;
 }

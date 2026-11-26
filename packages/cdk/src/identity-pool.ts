@@ -4,14 +4,14 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Construct, IConstruct } from 'constructs';
+import { Construct } from 'constructs';
 import { addBrowserClient, addDevClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
 import { addBrandedDomain, BrandedDomainProps } from './domains';
 import { LogicalIds, overrideLogicalIds } from './logical-ids';
 import { publishIds } from './parameters';
 import { addApple, addGoogle, ProviderSecretProps } from './providers';
-import { grantSignInMethods } from './sign-in-methods';
+import { grantSignInMethods, SignInMethodsGrantOptions } from './sign-in-methods';
 import { emailSender, grantTriggers, lambdaTriggers, TriggerProps, wireInboundFederation } from './triggers';
 import { createUserPool, UserPoolSettings } from './user-pool';
 
@@ -66,7 +66,6 @@ export class IdentityPool extends Construct {
   /** Set when there is a custom email sender; its function needs this key's ARN to decrypt. */
   public readonly emailKey?: kms.IKey;
   private readonly triggerFunctions: lambda.IFunction[];
-  private readonly passedIn: (IConstruct | undefined)[];
 
   constructor(scope: Construct, id: string, props: IdentityPoolProps) {
     super(scope, id);
@@ -74,13 +73,6 @@ export class IdentityPool extends Construct {
     const sender = emailSender(this, props.triggers, props.removalPolicy);
     this.emailKey = sender?.key;
     this.triggerFunctions = sender ? [handler, sender.handler] : [handler];
-    this.passedIn = [
-      ...this.triggerFunctions,
-      props.triggers.customEmailSender?.key,
-      props.directory?.table,
-      props.brandedDomain?.hostedZone,
-      props.brandedDomain?.certificate,
-    ];
 
     this.userPool = createUserPool(this, props, lambdaTriggers(handler, sender));
     wireInboundFederation(this.userPool, handler);
@@ -135,12 +127,12 @@ export class IdentityPool extends Construct {
    * `AdminGetUser`, `AdminLinkProviderForUser` and `AdminDisableProviderForUser`
    * on this pool, and read and write on the directory table.
    */
-  grantSignInMethods(grantee: iam.IGrantable): void {
-    grantSignInMethods(this, grantee, {
+  grantSignInMethods(grantee: iam.IGrantable, options: SignInMethodsGrantOptions = {}): void {
+    const resources = {
       userPool: this.userPool,
       directory: this.directory,
       triggerFunctions: this.triggerFunctions,
-      passedIn: this.passedIn,
-    });
+    };
+    grantSignInMethods(this, grantee, resources, options);
   }
 }

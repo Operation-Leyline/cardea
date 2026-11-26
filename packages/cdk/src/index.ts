@@ -9,4 +9,5 @@ export { IdentityPool } from './identity-pool';
 export type { IdentityPoolProps } from './identity-pool';
 export type { LogicalIds } from './logical-ids';
 export type { ProviderSecretProps } from './providers';
+export type { SignInMethodsGrantOptions } from './sign-in-methods';
 export type { CustomEmailSenderProps, TriggerProps } from './triggers';

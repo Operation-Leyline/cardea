@@ -116,6 +116,11 @@ describe('grantSignInMethods across stacks', () => {
       partitionKey: { name: 'identityKey', type: dynamodb.AttributeType.STRING },
     });
 
+  const poolStackPolicies = (auth: Stack) =>
+    (Object.values(Template.fromStack(auth).findResources('AWS::IAM::Policy')) as any[]).filter((policy) =>
+      JSON.stringify(policy).includes('AdminDisableProviderForUser'),
+    );
+
   it('stays on the role of a service in its own stack, which may read the pool id', () => {
     const { app, other, auth } = stacks();
     const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });
@@ -125,46 +130,73 @@ describe('grantSignInMethods across stacks', () => {
     expect(() => app.synth()).not.toThrow();
     expect(other.dependencies).toContain(auth);
     expect(statementsFor(Template.fromStack(other), 'ApiServiceRole').length).toBeGreaterThan(0);
-    expect(statementsFor(Template.fromStack(auth), 'ApiServiceRole')).toEqual([]);
+    expect(poolStackPolicies(auth)).toEqual([]);
   });
 
-  it.each(['the directory table', 'the trigger functions'])(
-    'moves to the pool stack for a service beside %s',
-    (beside) => {
-      const { app, other, auth } = stacks();
-      const identity = new IdentityPool(auth, 'Identity', {
+  /** Layouts where the pool's stack depends on the stack that holds the service's role. */
+  const upstream: Record<string, (other: Stack, auth: Stack) => { identity: IdentityPool; api: iam.IGrantable }> = {
+    'beside the directory table': (other, auth) => ({
+      identity: new IdentityPool(auth, 'Identity', {
+        triggers: { handler: fn(auth) },
+        directory: { table: table(other) },
         webClient,
-        ...(beside === 'the directory table'
-          ? { triggers: { handler: fn(auth) }, directory: { table: table(other) } }
-          : { triggers: { handler: fn(other) } }),
-      });
-      const api = fn(other, 'Api');
-      identity.grantSignInMethods(api);
-      identity.grantSignInMethods(api);
-      expect(() => app.synth()).not.toThrow();
-      expect(auth.dependencies).toContain(other);
-      expect(other.dependencies).not.toContain(auth);
-
-      const policies = Object.values(Template.fromStack(auth).findResources('AWS::IAM::Policy')) as any[];
-      const granted = policies.filter((policy) => JSON.stringify(policy).includes('AdminDisableProviderForUser'));
-      expect(granted).toHaveLength(1);
-      const actions = granted[0].Properties.PolicyDocument.Statement.flatMap((s: any) => s.Action);
-      expect(actions).toContain('dynamodb:PutItem');
-      expect(JSON.stringify(granted[0].Properties.Roles)).toContain('ApiServiceRole');
+      }),
+      api: fn(other, 'Api'),
+    }),
+    'beside the trigger functions': (other, auth) => ({
+      identity: new IdentityPool(auth, 'Identity', { triggers: { handler: fn(other) }, webClient }),
+      api: fn(other, 'Api'),
+    }),
+    'beside a table imported by its name token': (other, auth) => ({
+      identity: new IdentityPool(auth, 'Identity', {
+        triggers: { handler: fn(auth) },
+        directory: { table: dynamodb.TableV2.fromTableName(auth, 'Existing', table(other).tableName) },
+        webClient,
+      }),
+      api: fn(other, 'Api'),
+    }),
+    'as an imported role beside the trigger functions': (other, auth) => ({
+      identity: new IdentityPool(auth, 'Identity', { triggers: { handler: fn(other) }, webClient }),
+      api: iam.Role.fromRoleName(other, 'ApiRole', 'api'),
+    }),
+    'two dependencies away': (other, auth) => {
+      const functions = new Stack(auth.node.scope as App, 'Functions', { env });
+      functions.addDependency(other);
+      return {
+        identity: new IdentityPool(auth, 'Identity', { triggers: { handler: fn(functions) }, webClient }),
+        api: fn(other, 'Api'),
+      };
     },
-  );
+  };
 
-  it('does not treat a table only imported into the service stack as a dependency on it', () => {
+  it.each(Object.keys(upstream))('reports a cycle without the option, for a service %s', (layout) => {
     const { app, other, auth } = stacks();
-    const identity = new IdentityPool(auth, 'Identity', {
-      triggers: { handler: fn(auth) },
-      directory: { table: dynamodb.TableV2.fromTableName(other, 'Existing', 'live-identities') },
-      webClient,
-    });
-    const api = fn(other, 'Api');
-    api.addEnvironment('USER_POOL_ID', identity.userPool.userPoolId);
-    identity.grantSignInMethods(api);
+    const { identity, api } = upstream[layout](other, auth);
+    expect(() => {
+      identity.grantSignInMethods(api);
+      app.synth();
+    }).toThrow(/cyclic reference/);
+  });
+
+  it.each(Object.keys(upstream))('grants from the pool stack on request, for a service %s', (layout) => {
+    const { app, other, auth } = stacks();
+    const { identity, api } = upstream[layout](other, auth);
+    identity.grantSignInMethods(api, { policyInPoolStack: true });
+    identity.grantSignInMethods(api, { policyInPoolStack: true });
     expect(() => app.synth()).not.toThrow();
-    expect(other.dependencies).toContain(auth);
+    expect(other.dependencies).not.toContain(auth);
+
+    const granted = poolStackPolicies(auth);
+    expect(granted).toHaveLength(1);
+    expect(granted[0].Properties.Roles).toHaveLength(1);
+    const actions = granted[0].Properties.PolicyDocument.Statement.flatMap((s: any) => s.Action);
+    expect(actions).toContain('dynamodb:PutItem');
+  });
+
+  it('refuses the option for a grantee that is not a role', () => {
+    const { auth } = stacks();
+    const identity = new IdentityPool(auth, 'Identity', { triggers: { handler: fn(auth) }, webClient });
+    const user = new iam.User(auth, 'Operator');
+    expect(() => identity.grantSignInMethods(user, { policyInPoolStack: true })).toThrow(/IAM role/);
   });
 });

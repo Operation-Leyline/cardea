@@ -112,12 +112,19 @@ table. It refuses a trigger function or its role, and a grantee with no role,
 such as a function imported by ARN alone (import it with
 `Function.fromFunctionAttributes` and its role).
 
-Normally the statements go on the service's role, and a service in another stack
-depends on the pool's stack. If the service's role is in a stack the pool's
-stack already depends on (the trigger functions' stack, or the stack of a table
-or key you passed in), the construct puts them in a policy in the pool's stack
-instead. A service there cannot read the pool id from the construct either; give
-it the id some other way, such as reading the SSM parameter when it runs.
+The statements normally go on the service's role, in the role's stack, which
+then depends on the pool's stack. That cannot work when the pool's stack already
+depends on the role's stack, for example because that stack also holds the
+trigger functions or a table you passed in: CDK reports a cyclic reference.
+There, ask for the policy to be made in the pool's stack:
+
+```ts
+identity.grantSignInMethods(apiFunction, { policyInPoolStack: true });
+```
+
+Such a service cannot read the pool id from the construct either; give it the
+id another way, such as reading the SSM parameter when it runs. Leave the option
+off everywhere else, because it makes the pool's stack depend on the role's.
 
 ### What you still grant
 
