@@ -4,7 +4,7 @@ use super::*;
 use crate::mail::{Counter, DAILY_CAP, RESET_DAILY_CAP};
 use crate::testing::{
     ddb,
-    pending_change::{self, NEW, OBSERVED, OLD},
+    pending_change::{self, NEW, OBSERVED, OLD, VERIFIED},
     product::Outbox,
 };
 use cardea_core::Error;
@@ -224,7 +224,7 @@ async fn the_codes_a_pending_change_sends_are_refused() {
             .into_iter()
             .filter(|(source, _)| source.starts_with("CustomEmailSender_"))
             .map(|(source, email)| {
-                pending_change::event(source, email, Some(json!("true")), "012345")
+                pending_change::event(source, email, Some(json!(VERIFIED)), "012345")
             }),
     )
     .await;

@@ -1,17 +1,17 @@
 //! The events a live pool sent while a change from [`OLD`] to [`NEW`] waited
 //! for its code, with example addresses.
 //!
-//! Observed: each event's `triggerSource` and its
-//! `request.userAttributes.email` ([`OBSERVED`]), and that the stored account
-//! still read `email_verified` "true". The capture did not record
-//! `email_verified` as the events carried it, so its value here is assumed from
-//! the stored account. The rest of each event follows AWS's documented shape.
+//! Observed for each: `triggerSource`, `request.userAttributes.email`
+//! ([`OBSERVED`]) and `request.userAttributes.email_verified`, which was
+//! [`VERIFIED`] in all four. The rest of each event follows AWS's documented
+//! shape.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
 pub(crate) const OLD: &str = "old@example.com";
 pub(crate) const NEW: &str = "new@example.com";
+pub(crate) const VERIFIED: &str = "true";
 
 /// `(triggerSource, request.userAttributes.email)`.
 pub(crate) const OBSERVED: [(&str, &str); 4] = [

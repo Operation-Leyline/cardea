@@ -2,7 +2,7 @@
 //! one whose code could complete an email change, which is refused.
 
 use super::*;
-use crate::testing::pending_change::{self, NEW, OBSERVED, OLD};
+use crate::testing::pending_change::{self, NEW, OBSERVED, OLD, VERIFIED};
 
 const UPDATE: &str = "CustomMessage_UpdateUserAttribute";
 const VERIFY: &str = "CustomMessage_VerifyUserAttribute";
@@ -55,7 +55,7 @@ async fn the_messages_a_pending_change_sends_are_refused() {
     let fixture = fixture().await;
     for (source, email) in OBSERVED {
         if source.starts_with("CustomMessage_") {
-            assert_refused(&fixture, message(source, email, Some(json!("true")))).await;
+            assert_refused(&fixture, message(source, email, Some(json!(VERIFIED)))).await;
         }
     }
 }

@@ -152,7 +152,10 @@ not the address. On a live pool with a change pending,
 `request.userAttributes.email` held the old address in
 `CustomMessage_UpdateUserAttribute`, `CustomMessage_VerifyUserAttribute` and
 `CustomEmailSender_VerifyUserAttribute`, and the new one only in
-`CustomEmailSender_UpdateUserAttribute`.
+`CustomEmailSender_UpdateUserAttribute`; `email_verified` was true in all four.
+Refusing a custom message fails the caller's request. Refusing a custom email
+sender event does not: the caller is told a code was sent, Cognito runs the
+trigger again, and the address stays as it was.
 
 - `_UpdateUserAttribute` is always refused: with verification before update, it
   only carries a change.
