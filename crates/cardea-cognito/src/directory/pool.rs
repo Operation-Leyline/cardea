@@ -1,19 +1,25 @@
 //! The user pool: reading accounts and linking providers onto them.
 
 use aws_sdk_cognitoidentityprovider::{
-    operation::admin_get_user::AdminGetUserOutput, types::ProviderUserIdentifierType,
+    operation::admin_get_user::AdminGetUserOutput,
+    types::{AttributeType, ProviderUserIdentifierType},
 };
 use cardea_core::{EmailOwner, Error, NATIVE_ORIGIN, Provider, User, normalize_email, person_key};
 use serde_json::Value;
 
 use super::AwsDirectory;
 
-/// The value of one attribute of a Cognito user.
-pub(crate) fn attribute<'a>(raw: &'a AdminGetUserOutput, name: &str) -> Option<&'a str> {
-    raw.user_attributes()
+/// The value of the attribute `name` among a Cognito user's `attributes`.
+pub(crate) fn value_of<'a>(attributes: &'a [AttributeType], name: &str) -> Option<&'a str> {
+    attributes
         .iter()
         .find(|a| a.name() == name)
         .and_then(|a| a.value())
+}
+
+/// The value of one attribute of a Cognito user.
+pub(crate) fn attribute<'a>(raw: &'a AdminGetUserOutput, name: &str) -> Option<&'a str> {
+    value_of(raw.user_attributes(), name)
 }
 
 /// Whether the account's `identities` attribute lists this provider subject.

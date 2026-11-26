@@ -8,6 +8,7 @@ import { Construct } from 'constructs';
 import { addBrowserClient, addDevClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
 import { addBrandedDomain, BrandedDomainProps } from './domains';
+import { ErasureGrantOptions, grantErasure } from './erasure';
 import { LogicalIds, overrideLogicalIds } from './logical-ids';
 import { addDefaultBranding } from './managed-login';
 import { publishIds } from './parameters';
@@ -150,11 +151,24 @@ export class IdentityPool extends Construct {
    * on this pool, and read and write on the directory table.
    */
   grantSignInMethods(grantee: iam.IGrantable, options: SignInMethodsGrantOptions = {}): void {
-    const resources = {
+    grantSignInMethods(this, grantee, this.serviceResources(), options);
+  }
+
+  /**
+   * Grant the product's account-deletion worker what Cardea's erasure needs:
+   * `AdminGetUser` on this pool, and read and write (delete included) on the
+   * directory table. The worker's own `AdminDisableUser` and `AdminDeleteUser`
+   * are the product's to grant.
+   */
+  grantErasure(grantee: iam.IGrantable, options: ErasureGrantOptions = {}): void {
+    grantErasure(this, grantee, this.serviceResources(), options);
+  }
+
+  private serviceResources() {
+    return {
       userPool: this.userPool,
       directory: this.directory,
       triggerFunctions: this.triggerFunctions,
     };
-    grantSignInMethods(this, grantee, resources, options);
   }
 }

@@ -10,18 +10,18 @@ use crate::{
 };
 
 /// How often a change is tried while others keep winning.
-pub(super) const ATTEMPTS: u32 = 4;
+pub(crate) const ATTEMPTS: u32 = 4;
 
 /// An identity, named as the list names it.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct Identity {
+pub(crate) struct Identity {
     pub provider: Provider,
     pub subject: String,
 }
 
 impl MethodsRow {
     /// The list of a user who has none yet.
-    pub(super) fn empty(user: &User) -> Self {
+    pub(crate) fn empty(user: &User) -> Self {
         Self {
             user_id: user.user_id.clone(),
             version: 0,
@@ -41,7 +41,7 @@ impl MethodsRow {
     }
 
     /// The entry for `identity`, added without an address if absent.
-    pub(super) fn entry(&mut self, identity: &Identity) -> &mut LinkedIdentity {
+    pub(crate) fn entry(&mut self, identity: &Identity) -> &mut LinkedIdentity {
         let at = self.position(identity).unwrap_or_else(|| {
             self.identities.push(LinkedIdentity {
                 provider: ProviderRow::provider_name(identity.provider),
@@ -62,14 +62,14 @@ impl MethodsRow {
 
 impl AwsDirectory {
     /// `user`'s identity list, read consistently.
-    pub(super) async fn methods_row(&self, user: &User) -> Result<Option<MethodsRow>, Error> {
+    pub(crate) async fn methods_row(&self, user: &User) -> Result<Option<MethodsRow>, Error> {
         let key = MethodsRowKey::new(user.user_id.clone()).map_err(|_| Error::Invalid)?;
         self.row(key).await
     }
 
     /// Replace the list `read` (version 0: there was none) with `next`.
     /// `false` when another write came first and nothing changed.
-    pub(super) async fn replace_methods_row(
+    pub(crate) async fn replace_methods_row(
         &self,
         read: i64,
         mut next: MethodsRow,

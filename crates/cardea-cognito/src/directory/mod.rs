@@ -19,7 +19,7 @@ mod social;
 pub use holder::{HolderReadError, mailbox_holder};
 
 pub(crate) use claim::{Hold, now};
-pub(crate) use pool::attribute;
+pub(crate) use pool::{attribute, value_of};
 pub(crate) use social::ORIGIN_METADATA;
 
 /// The environment variable naming the directory table.

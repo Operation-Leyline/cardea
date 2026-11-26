@@ -1,14 +1,18 @@
 //! Cardea over AWS: the directory table, the Cognito admin calls, the trigger
 //! handler a product runs as its Lambda, the operations its API offers a
 //! signed-in person ([`link`] and [`methods`]), and the verification-mail
-//! budget.
+//! budget. For adoption and account deletion it also fills the directory for a
+//! pool that has users ([`backfill`]) and removes a deleted account's rows
+//! ([`erasure`]).
 //!
 //! A product implements [`triggers::Product`] and calls [`triggers::run`].
 //! The rules these act on are [`cardea_core`]'s.
 
+pub mod backfill;
 mod cause;
 pub mod directory;
 mod email_change;
+pub mod erasure;
 mod error;
 pub mod link;
 pub mod mail;

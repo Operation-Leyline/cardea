@@ -1,6 +1,7 @@
 # Disposable and throwaway mail domains refused at signup (crates/cardea-core/src/disposable.rs).
 # Checked in so signup makes no network call. Refresh: python -m tools.refresh_disposable_domains
 # Sorted, lowercase, one domain per line; a listed domain also covers its subdomains.
+# Do not edit: add a domain the public list lacks to disposable_domains_extra.txt.
 0-mail.com
 0clickemail.com
 10mail.org
@@ -35,6 +36,7 @@ armyspy.com
 artman-conception.com
 azmeil.tk
 baxomale.ht.cx
+bccto.me
 beefmilk.com
 bigstring.com
 binkmail.com
@@ -54,7 +56,9 @@ bumpymail.com
 burnermail.io
 burstmail.info
 buymoreplays.com
+byom.de
 casualdx.com
+chacuo.net
 chammy.info
 chasefreedomonline.com
 cheatmail.de
@@ -70,6 +74,7 @@ crapmail.org
 crazymailing.com
 cubiclink.com
 curryworld.de
+cuvox.de
 dandikmail.com
 dayrep.com
 dcemail.com
@@ -149,6 +154,7 @@ explodemail.com
 eyepaste.com
 fakeinbox.com
 fakemail.fr
+fakemail.net
 fakemailgenerator.com
 fakemailz.com
 fastacura.com
@@ -157,6 +163,7 @@ fastmitsubishi.com
 fastnissan.com
 fasttoyota.com
 fastyamaha.com
+fexpost.com
 fightallspam.com
 filzmail.com
 fivemail.de
@@ -236,6 +243,7 @@ ieh-mail.de
 imails.info
 inbax.tk
 inboxalias.com
+inboxbear.com
 inboxclean.com
 inboxclean.org
 inboxproxy.com
@@ -278,6 +286,7 @@ lovemeleaveme.com
 lr78.com
 lukop.dk
 mail-temporaire.fr
+mail.tm
 mail1a.de
 mail2rss.org
 mail333.com
@@ -355,10 +364,12 @@ migmail.pl
 mintemail.com
 mjukglass.nu
 moakt.com
+mohmal.com
 moncourrier.fr.nf
 monemail.fr.nf
 monmail.fr.nf
 monumentmail.com
+mt2015.com
 my10minutemail.com
 mycleaninbox.net
 mymailoasis.com
@@ -370,6 +381,8 @@ mytemp.email
 mytempemail.com
 mytempmail.com
 mythnick.club
+mytrashmail.com
+nada.email
 neomailbox.com
 nervmich.net
 nervtmich.net
@@ -403,11 +416,13 @@ oneoffemail.com
 oneoffmail.com
 onewaymail.com
 ordinaryamerican.net
+owlymail.com
 pancakemail.com
 paplease.com
 pepbot.com
 pimpedupmyspace.com
 plexolan.de
+pokemail.net
 politikerclub.de
 poofy.org
 pookmail.com
@@ -548,7 +563,9 @@ tempemail.net
 tempinbox.co.uk
 tempinbox.com
 tempmail.co
+tempmail.com
 tempmail.de
+tempmail.dev
 tempmail.eu
 tempmail.it
 tempmail.net
@@ -558,14 +575,17 @@ tempmailaddress.com
 tempmaildemo.com
 tempmailer.com
 tempmailer.de
+tempmailo.com
 tempomail.fr
 temporarily.de
 temporarioemail.com.br
+temporary-mail.net
 temporaryemail.net
 temporaryemail.us
 temporaryforwarding.com
 temporaryinbox.com
 temporarymailaddress.com
+tempr.email
 tempthe.net
 thanksnospam.info
 thankyou2010.com
@@ -579,6 +599,8 @@ tilien.com
 tittbit.in
 tmail.ws
 tmailinator.com
+tmpmail.net
+tmpmail.org
 toomail.biz
 topranklist.de
 tradermail.info
@@ -652,8 +674,10 @@ yogamaven.com
 yopmail.com
 yopmail.fr
 yopmail.net
+yourmailgpt.com
 zehnminuten.de
 zehnminutenmail.de
+zetmail.com
 zippymail.info
 zoaxe.com
 zoemail.com

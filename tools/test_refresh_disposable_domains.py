@@ -51,13 +51,42 @@ class RefreshTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'disposable_domains.txt'
             output.write_text(refresh.render(['old.example']), encoding='utf-8')
+            extra = Path(directory) / 'extra.txt'
+            extra.write_text('# none\n', encoding='utf-8')
             before = output.read_text(encoding='utf-8')
             fake = lambda: listing(refresh.MINIMUM)
-            self.assertEqual(refresh.run(args(check=True, allow_shrink=True), fake, output), 1)
+            self.assertEqual(refresh.run(args(check=True, allow_shrink=True), fake, output, extra), 1)
             self.assertEqual(output.read_text(encoding='utf-8'), before)
-            self.assertEqual(refresh.run(args(allow_shrink=True), fake, output), 0)
+            self.assertEqual(refresh.run(args(allow_shrink=True), fake, output, extra), 0)
             self.assertEqual(len(refresh.entries(output.read_text(encoding='utf-8'))), refresh.MINIMUM)
-            self.assertEqual(refresh.run(args(check=True), fake, output), 0)
+            self.assertEqual(refresh.run(args(check=True), fake, output, extra), 0)
+
+    def test_a_refresh_keeps_the_extra_domains(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'disposable_domains.txt'
+            extra = Path(directory) / 'extra.txt'
+            extra.write_text('# ours\nonly-ours.example\nthrowaway0000.example\n', encoding='utf-8')
+            self.assertEqual(refresh.run(args(), lambda: listing(refresh.MINIMUM), output, extra), 0)
+            domains = refresh.entries(output.read_text(encoding='utf-8'))
+            self.assertIn('only-ours.example', domains)
+            self.assertEqual(domains.count('throwaway0000.example'), 1)
+            self.assertEqual(len(domains), refresh.MINIMUM + 1)
+
+    def test_extra_domains_do_not_hide_a_truncated_download(self):
+        with self.assertRaisesRegex(ValueError, 'truncated'):
+            refresh.refreshed(listing(refresh.MINIMUM - 1), '', extra_text='a.example\nb.example\n')
+
+    def test_an_extra_entry_is_held_to_the_same_rules(self):
+        for bad in ('gmail.com\n', 'not a domain\n'):
+            with self.assertRaises(ValueError, msg=bad):
+                refresh.refreshed(listing(refresh.MINIMUM), '', extra_text=bad)
+
+    def test_a_missing_extra_list_stops_the_refresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'disposable_domains.txt'
+            with self.assertRaises(FileNotFoundError):
+                refresh.run(args(), lambda: listing(refresh.MINIMUM), output, Path(directory) / 'absent.txt')
+            self.assertFalse(output.exists())
 
     def test_the_fetch_is_https_only_and_size_bounded(self):
         with self.assertRaises(ValueError):
@@ -87,6 +116,12 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(domains, refresh.parse(text))
         self.assertFalse(refresh.NEVER_BLOCK.intersection(domains))
         self.assertEqual(text, refresh.render(domains))
+
+    def test_the_checked_in_extra_list_is_sorted_and_merged(self):
+        extra = refresh.EXTRA.read_text(encoding='utf-8')
+        self.assertEqual(refresh.entries(extra), refresh.parse(extra))
+        listed = set(refresh.entries(refresh.OUTPUT.read_text(encoding='utf-8')))
+        self.assertEqual(set(refresh.entries(extra)) - listed, set())
 
 
 if __name__ == '__main__':

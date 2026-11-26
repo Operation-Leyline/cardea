@@ -54,7 +54,9 @@ Moved from Leyline (`normalize_email`, `person_key`,
 `same_mailbox`, `same_inbox`): trim and lowercase is the delivery address;
 the person key also drops a `+tag` on every domain, drops dots from a Gmail
 local part and reads `googlemail.com` as `gmail.com`. The disposable-domain
-list and its refresh tool move too.
+list and its refresh tool move too. Domains a product blocks that the public
+list lacks are kept in `disposable_domains_extra.txt`; the refresh tool merges
+them into the compiled list, so a refresh never drops them.
 
 One rule is new (decided 2026-11-26): the person key also reads `me.com` and
 `mac.com` as `icloud.com`. Apple gives everyone with an `@me.com` or
@@ -224,6 +226,81 @@ is neither linked nor signed in with until that is done.
 API keys can call none of these. Errors stay generic and never reveal
 another account.
 
+## Erasing an account
+
+Deleting a Cognito user leaves its `EMAIL#`, `PROVIDER#` and `METHODS#` rows
+behind: the mailbox could never sign up again, and the provider identities would
+lead to a user that no longer exists. A product's account-deletion worker
+removes them with `cardea_cognito::erasure`. The product disables and deletes
+the user; the library never does.
+
+| Step | Who | Does |
+|---|---|---|
+| 1 | product | `AdminDisableUser` (recommended), so that nothing signs in or links meanwhile |
+| 2 | `plan_erasure(user)` | reads the `METHODS#` row, the pool user's `identities` and the mailbox's row; records in the directory what only the pool knows: each identity on the list, and `userId` on a mailbox row the pool shows to be this user's |
+| 3 | product | `AdminDeleteUser` |
+| 4 | `erase_user(plan)` | for each identity, deletes the `PROVIDER#` row; deletes the `EMAIL#` row; then deletes `METHODS#` |
+
+- **Only this user's rows.** Each delete is conditional on the row naming this
+  `userId`. A row someone else holds is left and counted.
+- **Order is enforced.** `erase_user` refuses, deleting nothing, while the pool
+  holds a user with that username and `sub`. Planned after the deletion, a
+  binding the list does not name cannot be found, and an unbound mailbox row is
+  left.
+- **Repeats.** After any failure, run the steps again from the start, treating a
+  user already gone as deleted. The product keeps the user's id, username and
+  email until step 4 succeeds; the plan need not be kept, because step 2 wrote
+  what it learned into the rows, and `METHODS#` goes last.
+- The report counts rows removed and left. It holds no address.
+- Both steps refuse until the directory is open.
+- `LINK#` challenges and mail budget rows expire on their own.
+- Not found: a `PROVIDER#` row whose link stopped between the binding and the
+  pool call, never reached the list and was never retried. Neither the pool nor
+  a keyed read leads to it; an operator removes it.
+
+The worker needs `AdminGetUser` on the pool and `GetItem`, `PutItem`,
+`UpdateItem` and `DeleteItem` on the table (`grantErasure` in the CDK package),
+and its own `AdminDisableUser` and `AdminDeleteUser`.
+
+## Backfilling an existing pool
+
+A pool with users needs their rows before `SYSTEM#READY`: without them their
+mailboxes look unclaimed. `cardea_cognito::backfill`, run by an operator as
+`cardea-backfill --pool <id> --table <name> [--apply] [--activate]`, writes
+them. The rules come from Leyline's `backfill_identity_directory.py`, extended
+to pools that already link providers.
+
+For every user the pool lists:
+
+| Row | Written as |
+|---|---|
+| `EMAIL#{personKey}` | the address normalized, the pool's username, origin `Cognito` for a native user and the provider's name for a federated-only one; `userId` is the `sub`. An unconfirmed user gets no `userId` and a claim that lapses after 24 h, as a signup does |
+| `passwordSet` | true for a confirmed native user; false for a federated-only one and for a native user with no password in force (`FORCE_CHANGE_PASSWORD`, `RESET_REQUIRED`); absent when unconfirmed, which reads as true |
+| `PROVIDER#…` | one per linked identity, naming the user with the pool's username and address |
+| `METHODS#{userId}` | one per user with linked identities, addresses null |
+
+- **Dry run by default.** `--apply` writes; `--activate` needs `--apply`.
+- **Never overwrites.** Each write is conditional on the key being free. A row
+  already there that is the user's counts as covered.
+- **Conflicts are reported, not resolved:** two users on one person key (neither
+  gets any row), a mailbox row that is another's (the user gets no row), a
+  subject bound elsewhere, a binding with an outdated username or address, a
+  lapsing claim on a user past confirmation, and a user or row that cannot be
+  read.
+- **Federated-only users** (`google_…`) get their binding pointing at
+  themselves, with a note: Cardea signs people in to native users, and such a
+  user cannot sign in until the product converts them. Converting after
+  activation means erasing the old user's rows (above) first.
+- **Activation.** `--activate` writes `SYSTEM#READY` only after a second pass,
+  which lists the pool again, finds every row present and nothing to settle. An
+  open directory is only read.
+- Reports and errors hold counts and user ids (`sub`), never addresses,
+  usernames or provider subjects.
+
+Deploy the Cardea triggers before the backfill. Until the marker is written they
+refuse new accounts, so none appears outside the directory, and provider
+sign-ins too, so the window should be short.
+
 ## Web package
 
 Framework-free core with optional React hooks, replacing the auth code in
@@ -257,7 +334,9 @@ policy, email-only recovery, optional TOTP), the prefix domain and an
 optional branded domain, Google and Apple providers from Secrets Manager,
 the web client and an optional localhost dev client, the directory table
 (on-demand, TTL, point-in-time recovery, retained), the trigger wiring for a
-product-built function, and the custom email sender's KMS key. Yoru (SST)
+product-built function, and the custom email sender's KMS key. It grants a
+product's API service the sign-in method operations (`grantSignInMethods`) and
+its deletion worker erasure (`grantErasure`). Yoru (SST)
 wires the same settings itself; `packages/cdk/README.md` lists them.
 
 ## Adoption
@@ -277,7 +356,10 @@ wires the same settings itself; `packages/cdk/README.md` lists them.
    with Google linked. Doing that gives them a new Cognito `sub`, and Yoru's
    `userId` is the `sub`. Decided 2026-11-26: the only such account is the
    owner's, so a one-off step at adoption moves that account's data to its
-   new id. No `custom:userId` claim and no general migration tool.
+   new id. No `custom:userId` claim and no general migration tool. Its
+   existing users get their directory rows from the
+   [backfill](#backfilling-an-existing-pool), and its account deletion calls
+   [erasure](#erasing-an-account).
 
 ## Not in v1
 
@@ -300,6 +382,7 @@ Changing a person's email (needs a verified move of the mailbox claim).
 |---|---|---|
 | A | `cardea-core` and `cardea-cognito`: person key, providers, resolution, directory, trigger handler with `Product`, mail budget, moved from Leyline with its tests | — |
 | B | link challenges for any provider, Apple proof verification, sign-in methods, unlink, `passwordSet` | A |
+| C2 | what adoption needs: Yoru's disposable domains, erasing an account, backfilling an existing pool | A, B, D |
 | C | `packages/web` | — (uses the operations' shapes above) |
 | D | `packages/cdk` and CI | — |
 | E | Leyline adoption | A, B |

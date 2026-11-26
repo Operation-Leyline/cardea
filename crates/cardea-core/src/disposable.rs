@@ -4,7 +4,8 @@
 //! The list is a checked-in file compiled into the binary. Signup never makes
 //! a network call to decide, so there is no outage to depend on;
 //! `tools/refresh_disposable_domains.py` regenerates the file and a person
-//! reviews the diff.
+//! reviews the diff. The tool merges in `disposable_domains_extra.txt`, the
+//! domains the public list lacks.
 use std::{collections::HashSet, sync::OnceLock};
 
 const LIST: &str = include_str!("disposable_domains.txt");
@@ -69,6 +70,23 @@ mod tests {
             "",
         ] {
             assert!(!is_disposable(email), "{email}");
+        }
+    }
+
+    #[test]
+    fn every_extra_domain_is_refused() {
+        let extra: Vec<&str> = include_str!("disposable_domains_extra.txt")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        for expected in ["bccto.me", "mail.tm", "temporary-mail.net", "zetmail.com"] {
+            assert!(extra.contains(&expected), "{expected}");
+        }
+        assert!(extra.len() >= 23, "the extra list looks truncated");
+        for domain in extra {
+            assert!(is_disposable(&format!("a@{domain}")), "{domain}");
+            assert!(is_disposable(&format!("a@box.{domain}")), "box.{domain}");
         }
     }
 

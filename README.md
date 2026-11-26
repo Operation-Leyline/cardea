@@ -8,7 +8,8 @@ one person is one account, whether they sign in with a password, Google or
 Apple.
 
 - `crates/cardea-core`: rules (person key, providers, resolution). No AWS.
-- `crates/cardea-cognito`: directory table, Cognito triggers, linking.
+- `crates/cardea-cognito`: directory table, Cognito triggers, linking, account
+  erasure, and `cardea-backfill` for a pool that has users.
 - `packages/web`: browser sign-in, sessions and link-a-method hooks.
 - `packages/cdk`: the user pool, providers, clients and table as one construct.
 

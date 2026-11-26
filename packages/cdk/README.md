@@ -136,6 +136,29 @@ the role must be in the pool's account, and both stacks must say so the same way
 (the same `env.account`, or neither). Anything else is refused. The trigger
 functions' roles are held to the same rule.
 
+### Your account-deletion worker
+
+Deleting an account must also remove its directory rows, or its mailbox can
+never sign up again (DESIGN.md, "Erasing an account"). Grant the worker that
+runs Cardea's erasure:
+
+```ts
+identity.grantErasure(deletionWorker);
+```
+
+It grants `cognito-idp:AdminGetUser` on this pool, and read and write (delete
+included) on the directory table. The erasure functions do not disable or delete
+the user; your worker does, so grant those yourself:
+
+```ts
+identity.userPool.grant(deletionWorker, 'cognito-idp:AdminDisableUser', 'cognito-idp:AdminDeleteUser');
+```
+
+`grantErasure` refuses the same grantees as `grantSignInMethods` and takes the
+same `policyInPoolStack` option, for the same layouts. `userPool.grant` puts its
+statements on the role, in the role's stack; where that is a cycle, write them
+into a policy of your own in the pool's stack.
+
 ### What you still grant
 
 The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,
@@ -143,8 +166,8 @@ The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,
 write on the directory table, and, when it is also the email sender,
 `kms:Decrypt` on the email key. A [separate sender
 function](#a-separate-email-sender) gets less. Everything else is yours: your
-product's tables, the mail budget table, sending mail, and your API's own
-permissions beyond `grantSignInMethods`.
+product's tables, the mail budget table, sending mail, and your services' own
+permissions beyond `grantSignInMethods` and `grantErasure`.
 
 Do not give a trigger function the pool's id or ARN through
 `addEnvironment`, `addToRolePolicy` or a `grant*` call: the pool depends on
@@ -261,9 +284,40 @@ already there, which changes nothing.
 
 **Only do this for a pool with no users.** A pool that has users needs an
 ownership row (`EMAIL#…`) for each of them in the table first; with the marker
-alone, their mailboxes look unclaimed. Cardea ships no backfill tool. The
-construct does not write the marker, because it cannot know whether the pool is
-empty. A table that is already in use, such as Leyline's, has its marker.
+alone, their mailboxes look unclaimed. For such a pool, do not run the command
+above: [backfill it](#backfill-an-existing-pool). The construct does not write
+the marker, because it cannot know whether the pool is empty. A table that is
+already in use, such as Leyline's, has its marker.
+
+## Backfill an existing pool
+
+`cardea-backfill`, in the `cardea-cognito` crate, gives every pool user their
+directory rows and then writes the marker (DESIGN.md, "Backfilling an existing
+pool"). Deploy the Cardea triggers first: from then until the marker is written
+they refuse new accounts and provider sign-ins, so do not leave it long. From a
+checkout of this repository, with your own credentials:
+
+```bash
+# Dry run: counts and findings, nothing written.
+cargo run -p cardea-cognito --bin cardea-backfill -- \
+  --pool "$USER_POOL_ID" --table "$IDENTITIES_TABLE"
+# Write the missing rows.
+cargo run -p cardea-cognito --bin cardea-backfill -- \
+  --pool "$USER_POOL_ID" --table "$IDENTITIES_TABLE" --apply
+# Write what is still missing, check every user again, and open the directory.
+cargo run -p cardea-cognito --bin cardea-backfill -- \
+  --pool "$USER_POOL_ID" --table "$IDENTITIES_TABLE" --apply --activate
+```
+
+It needs `cognito-idp:ListUsers` on the pool, and `dynamodb:GetItem` and
+`PutItem` on the table. It prints counts and user ids (`sub`), never addresses.
+It exits 0 when done, 1 when it failed and 2 when something is left to settle:
+settle each line under "to settle" and run it again. Read the notes too; a user
+that exists only behind a provider sign-in must be converted to a native user
+before they can sign in.
+
+A run against a directory that is already open only reports. If the marker was
+written before the backfill, delete the `SYSTEM#READY` item and run it.
 
 ## Domains
 
@@ -419,7 +473,7 @@ construct does not create (a dev client without `devClient`, say) is an error.
   it to the construct instead, pass `logicalIds.directory`, with
   `directory.tableName` and `directory.replicaRegions` as deployed.
   A pool with users that has no directory table yet needs one filled first; see
-  [Open the directory](#open-the-directory).
+  [Backfill an existing pool](#backfill-an-existing-pool).
 - **Email key.** A key you pass as `customEmailSender.key` stays yours, so it
   takes no `logicalIds.emailKey`.
 - **Other named resources.** A branded domain's alias record and the SSM
@@ -537,7 +591,11 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
 - Partition key `identityKey` (string), no sort key; on-demand billing; TTL
   attribute `expiresAt`; point-in-time recovery; retained.
 - The readiness marker, written once as in
-  [Open the directory](#open-the-directory).
+  [Open the directory](#open-the-directory), or by the
+  [backfill](#backfill-an-existing-pool) for a pool with users.
+- An account-deletion worker needs `cognito-idp:AdminGetUser` on the pool and
+  `GetItem`, `PutItem`, `UpdateItem` and `DeleteItem` on the table, besides its
+  own `AdminDisableUser` and `AdminDeleteUser`.
 
 **Providers**
 
