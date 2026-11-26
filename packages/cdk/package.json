@@ -1,0 +1,43 @@
+{
+  "name": "@operation-leyline/cardea-cdk",
+  "version": "0.1.0",
+  "description": "The Cognito pool, providers, clients, domains, directory table and trigger wiring of Cardea, Operation Leyline sign-in,, as one CDK construct.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Operation-Leyline/cardea.git",
+    "directory": "packages/cdk"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --testTimeout=60000",
+    "synth:example": "cdk synth --app \"tsx examples/app.ts\" --no-lookups --no-notices --no-version-reporting",
+    "prepack": "pnpm run build"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.200.0",
+    "constructs": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.7",
+    "aws-cdk": "^2.1149.0",
+    "aws-cdk-lib": "^2.278.0",
+    "constructs": "^10.8.1",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}
