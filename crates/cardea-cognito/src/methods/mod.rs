@@ -20,8 +20,8 @@ use crate::directory::AwsDirectory;
 
 mod admit;
 mod list;
-mod pool;
-mod row;
+pub(crate) mod pool;
+pub(crate) mod row;
 mod unlink;
 
 pub use list::{SignInMethod, list_sign_in_methods};

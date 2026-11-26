@@ -1,4 +1,4 @@
-//! A fake user pool: the five admin calls the library makes, on loopback.
+//! A fake user pool: the admin calls the library makes, on loopback.
 
 use std::{
     collections::BTreeMap,
@@ -24,11 +24,51 @@ pub(crate) const SUB: &str = "sub-0";
 pub(crate) struct Account {
     pub sub: String,
     pub email: String,
+    /// Another name the pool accepts for the account.
+    pub alias: Option<String>,
     pub status: &'static str,
     /// `(providerName, subject)`.
     pub identities: Vec<(String, String)>,
     /// Report `email_verified` as false.
     pub unverified: bool,
+    pub disabled: bool,
+}
+
+impl Account {
+    /// A verified, enabled account with nothing linked. An empty `email` is no
+    /// address at all.
+    pub fn new(sub: &str, email: &str, status: &'static str) -> Self {
+        Self {
+            sub: sub.into(),
+            email: email.into(),
+            alias: None,
+            status,
+            identities: Vec::new(),
+            unverified: false,
+            disabled: false,
+        }
+    }
+
+    /// The attributes as Cognito lists them.
+    fn attributes(&self) -> Vec<Value> {
+        let mut attributes = vec![
+            json!({"Name":"sub","Value":self.sub}),
+            json!({"Name":"email_verified","Value":(!self.unverified).to_string()}),
+        ];
+        if !self.email.is_empty() {
+            attributes.push(json!({"Name":"email","Value":self.email}));
+        }
+        if !self.identities.is_empty() {
+            let identities: Vec<Value> = self
+                .identities
+                .iter()
+                .map(|(provider, subject)| json!({"providerName":provider,"userId":subject}))
+                .collect();
+            attributes.push(json!({"Name":"identities",
+                "Value":Value::from(identities).to_string()}));
+        }
+        attributes
+    }
 }
 
 #[derive(Default)]
@@ -54,6 +94,14 @@ pub(crate) struct PoolState {
     pub lost_disables: usize,
     /// The next calls reading a user wait here for each other first.
     pub read_barrier: Option<(Arc<Barrier>, usize)>,
+    /// The most users one `ListUsers` page holds; 0 is Cognito's 60.
+    pub page_size: usize,
+    /// `ListUsers` pages answered.
+    pub pages: usize,
+    /// An account that appears once a listing has reached its last page.
+    pub arrives_late: Option<(String, Account)>,
+    /// `ListUsers` calls that are refused.
+    pub list_failures: usize,
 }
 
 #[derive(Clone, Default)]
@@ -66,16 +114,14 @@ impl Pool {
 
     /// Put an account in the pool.
     pub fn add(&self, username: &str, sub: &str, email: &str, status: &'static str) {
-        self.state().users.insert(
-            username.into(),
-            Account {
-                sub: sub.into(),
-                email: email.into(),
-                status,
-                identities: Vec::new(),
-                unverified: false,
-            },
-        );
+        self.state()
+            .users
+            .insert(username.into(), Account::new(sub, email, status));
+    }
+
+    /// Delete an account, as `AdminDeleteUser` does.
+    pub fn remove(&self, username: &str) {
+        self.state().users.remove(username).expect("an account");
     }
 
     pub(super) async fn serve(&self) -> Loopback {
@@ -194,41 +240,31 @@ async fn answer(
         }
         return ok;
     }
+    if operation == "ListUsers" {
+        return list_users(&mut state, &request);
+    }
     let username = request["Username"].as_str().unwrap().to_owned();
-    // A user is found by its username or by its email alias, in any case.
+    // A user is found by its username, its other alias, or its email alias in
+    // any case.
     let found = state
         .users
         .iter()
-        .find(|(name, user)| **name == username || user.email.eq_ignore_ascii_case(&username))
+        .find(|(name, user)| {
+            **name == username
+                || user.alias.as_ref() == Some(&username)
+                || user.email.eq_ignore_ascii_case(&username)
+        })
         .map(|(name, user)| (name.clone(), user.clone()));
     match operation {
         "AdminGetUser" => match found {
             None => refusal("UserNotFoundException"),
-            Some((name, user)) => {
-                let mut attributes = vec![
-                    json!({"Name":"sub","Value":user.sub}),
-                    json!({"Name":"email","Value":user.email}),
-                    json!({"Name":"email_verified","Value":(!user.unverified).to_string()}),
-                ];
-                if !user.identities.is_empty() {
-                    let identities: Vec<Value> = user
-                        .identities
-                        .iter()
-                        .map(
-                            |(provider, subject)| json!({"providerName":provider,"userId":subject}),
-                        )
-                        .collect();
-                    attributes.push(json!({"Name":"identities",
-                        "Value":Value::from(identities).to_string()}));
-                }
-                (
-                    StatusCode::OK,
-                    Json(
-                        json!({"Username":name,"Enabled":true,"UserStatus":user.status,
-                        "UserAttributes":attributes}),
-                    ),
-                )
-            }
+            Some((name, user)) => (
+                StatusCode::OK,
+                Json(
+                    json!({"Username":name,"Enabled":!user.disabled,"UserStatus":user.status,
+                    "UserAttributes":user.attributes()}),
+                ),
+            ),
         },
         "AdminCreateUser" => {
             if found.is_some() {
@@ -248,13 +284,7 @@ async fn answer(
                 .to_owned();
             state.users.insert(
                 username,
-                Account {
-                    sub,
-                    email,
-                    status: "FORCE_CHANGE_PASSWORD",
-                    identities: Vec::new(),
-                    unverified: false,
-                },
+                Account::new(&sub, &email, "FORCE_CHANGE_PASSWORD"),
             );
             ok
         }
@@ -269,4 +299,45 @@ async fn answer(
         }
         other => panic!("unexpected Cognito call {other}"),
     }
+}
+
+/// One page of users, in username order. The token is the last username given.
+fn list_users(state: &mut PoolState, request: &Value) -> (StatusCode, Json<Value>) {
+    if state.list_failures > 0 {
+        state.list_failures -= 1;
+        return refusal("TooManyRequestsException");
+    }
+    state.pages += 1;
+    let size = if state.page_size == 0 {
+        60
+    } else {
+        state.page_size
+    };
+    let after = request["PaginationToken"].as_str().unwrap_or_default();
+    let mut rest = state
+        .users
+        .iter()
+        .filter(|(name, _)| after.is_empty() || name.as_str() > after);
+    let page: Vec<(&String, &Account)> = rest.by_ref().take(size).collect();
+    let token = rest
+        .next()
+        .and(page.last())
+        .map(|(name, _)| (*name).clone());
+    let users: Vec<Value> = page
+        .iter()
+        .map(|(name, user)| {
+            json!({"Username":name,"Enabled":!user.disabled,"UserStatus":user.status,
+                "Attributes":user.attributes()})
+        })
+        .collect();
+    let mut answer = json!({"Users": users});
+    match token {
+        Some(token) => answer["PaginationToken"] = token.into(),
+        None => {
+            if let Some((name, account)) = state.arrives_late.take() {
+                state.users.insert(name, account);
+            }
+        }
+    }
+    (StatusCode::OK, Json(answer))
 }

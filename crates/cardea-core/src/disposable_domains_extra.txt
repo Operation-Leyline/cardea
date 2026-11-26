@@ -1,0 +1,26 @@
+# Domains Cardea blocks in addition to the public list, one per line, sorted and lowercase.
+# python -m tools.refresh_disposable_domains merges them into disposable_domains.txt,
+# so a refresh never drops them. Add a domain here, then run the tool.
+bccto.me
+byom.de
+chacuo.net
+cuvox.de
+fakemail.net
+fexpost.com
+inboxbear.com
+mail.tm
+mohmal.com
+mt2015.com
+mytrashmail.com
+nada.email
+owlymail.com
+pokemail.net
+tempmail.com
+tempmail.dev
+tempmailo.com
+temporary-mail.net
+tempr.email
+tmpmail.net
+tmpmail.org
+yourmailgpt.com
+zetmail.com

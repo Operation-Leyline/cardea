@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use aws_sdk_dynamodb::{
-    Client, error::SdkError, operation::transact_write_items::TransactWriteItemsError,
+    Client,
+    error::{ProvideErrorMetadata, SdkError},
+    operation::transact_write_items::TransactWriteItemsError,
     types::TransactWriteItem,
 };
 
@@ -11,6 +13,33 @@ use aws_sdk_dynamodb::{
 #[derive(Debug, thiserror::Error)]
 #[error("the transaction failed")]
 pub struct TransactError(#[source] pub Box<SdkError<TransactWriteItemsError>>);
+
+impl TransactError {
+    /// AWS's code for what stopped the transaction. `None` only when the
+    /// cancellation says a condition or a race did: the table was not as the
+    /// writes expected, and nothing else was wrong.
+    pub(crate) fn fault(&self) -> Option<String> {
+        fault_in(self.0.as_service_error())
+    }
+}
+
+fn fault_in(error: Option<&TransactWriteItemsError>) -> Option<String> {
+    let cancelled = match error {
+        Some(TransactWriteItemsError::TransactionCanceledException(cancelled)) => cancelled,
+        Some(refused) => return Some(refused.code().unwrap_or("unknown error").to_owned()),
+        None => return Some("no answer".into()),
+    };
+    let mut raced = false;
+    for reason in cancelled.cancellation_reasons() {
+        match reason.code() {
+            None | Some("None") => {}
+            Some("ConditionalCheckFailed" | "TransactionConflict") => raced = true,
+            Some(other) => return Some(other.to_owned()),
+        }
+    }
+    // A cancellation that gives no reason is not taken for a race.
+    (!raced).then(|| "TransactionCanceledException".into())
+}
 
 /// Whether a transaction was cancelled only because another transaction held
 /// one of its items: nothing was decided, so the same writes can go again.
@@ -65,6 +94,33 @@ mod tests {
                 .set_cancellation_reasons(Some(reasons))
                 .build(),
         )
+    }
+
+    #[test]
+    fn a_fault_is_anything_but_a_condition_or_a_race() {
+        let fault = |codes: &[&str]| fault_in(Some(&cancelled(codes)));
+        assert_eq!(fault(&["None", "ConditionalCheckFailed"]), None);
+        assert_eq!(fault(&["TransactionConflict", "None"]), None);
+        assert_eq!(
+            fault(&["ConditionalCheckFailed", "ThrottlingError"]),
+            Some("ThrottlingError".into())
+        );
+        let denied = TransactWriteItemsError::generic(
+            aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                .code("AccessDeniedException")
+                .build(),
+        );
+        assert_eq!(
+            fault_in(Some(&denied)),
+            Some("AccessDeniedException".into())
+        );
+        assert_eq!(fault_in(None), Some("no answer".into()));
+        for unexplained in [&[][..], &["None", "None"]] {
+            assert_eq!(
+                fault(unexplained),
+                Some("TransactionCanceledException".into())
+            );
+        }
     }
 
     #[test]

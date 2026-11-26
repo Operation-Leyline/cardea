@@ -19,7 +19,7 @@ mod social;
 pub use holder::{HolderReadError, mailbox_holder};
 
 pub(crate) use claim::{Hold, now};
-pub(crate) use pool::attribute;
+pub(crate) use pool::{attribute, value_of};
 pub(crate) use social::ORIGIN_METADATA;
 
 /// The environment variable naming the directory table.
@@ -178,27 +178,16 @@ impl Directory for AwsDirectory {
         self.is_unconfirmed(username).await
     }
 
+    /// A new binding is written together with the identity's place on
+    /// `user`'s list. Refused with [`Error::NotReady`] while an unlink of the
+    /// identity is unfinished.
     async fn claim_provider(
         &self,
         provider: Provider,
         subject: &str,
         user: &User,
     ) -> Result<(), Error> {
-        self.put_new(&ProviderRow {
-            provider: ProviderRow::provider_name(provider),
-            subject: subject.to_owned(),
-            record: user.clone(),
-        })
-        .await?;
-        let winner = self
-            .provider(provider, subject)
-            .await?
-            .ok_or(Error::Unavailable)?;
-        if winner == *user {
-            Ok(())
-        } else {
-            Err(Error::Conflict)
-        }
+        self.bind_identity(user, provider, subject, None).await
     }
 
     async fn native_user(&self, owner: &EmailOwner) -> Result<User, Error> {

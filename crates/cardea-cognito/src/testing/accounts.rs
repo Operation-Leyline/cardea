@@ -12,6 +12,7 @@ use crate::{
     OperationError,
     directory::now,
     link::{IdentityLinkChallenge, ProviderClients, complete_identity_link, create_identity_link},
+    record::ProviderRow,
 };
 
 /// Every provider under its test client id.
@@ -90,6 +91,18 @@ impl Fixture {
     /// [`Fixture::try_link`] at the user's own address, expected to succeed.
     pub async fn link(&self, user: &User, provider: Provider, subject: &str) {
         self.try_link(user, provider, subject, &user.email)
+            .await
+            .unwrap();
+    }
+
+    /// A binding alone, as it was written before bindings went on the list.
+    pub async fn unlisted_binding(&self, user: &User, provider: Provider, subject: &str) {
+        self.directory
+            .put_new(&ProviderRow {
+                provider: ProviderRow::provider_name(provider),
+                subject: subject.to_owned(),
+                record: user.clone(),
+            })
             .await
             .unwrap();
     }

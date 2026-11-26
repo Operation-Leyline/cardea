@@ -5,6 +5,7 @@
 export type { AppUrls } from './clients';
 export type { DirectoryProps } from './directory';
 export type { BrandedDomainProps } from './domains';
+export type { ErasureGrantOptions } from './erasure';
 export { IdentityPool } from './identity-pool';
 export type { IdentityPoolProps } from './identity-pool';
 export type { LogicalIds } from './logical-ids';

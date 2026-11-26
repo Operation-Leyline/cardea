@@ -4,6 +4,8 @@
 call (crates/cardea-core/src/disposable.rs). This script, run by an operator, replaces it
 from the public disposable-email-domains list (CC0) and leaves the diff for
 review: a person reads it, then commits. It never runs at signup or in CI.
+Domains the public list lacks are in `disposable_domains_extra.txt` beside it;
+every refresh merges them in.
 
     python -m tools.refresh_disposable_domains            # fetch, rewrite the file
     python -m tools.refresh_disposable_domains --check    # fetch, exit 1 if the file is out of date
@@ -22,6 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'crates' / 'cardea-core' / 'src' / 'disposable_domains.txt'
+EXTRA = OUTPUT.with_name('disposable_domains_extra.txt')
 UPSTREAM = ('https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/'
             'main/disposable_email_blocklist.conf')
 MINIMUM = 500
@@ -37,6 +40,7 @@ HEADER = (
     '# Disposable and throwaway mail domains refused at signup (crates/cardea-core/src/disposable.rs).\n'
     '# Checked in so signup makes no network call. Refresh: python -m tools.refresh_disposable_domains\n'
     '# Sorted, lowercase, one domain per line; a listed domain also covers its subdomains.\n'
+    '# Do not edit: add a domain the public list lacks to disposable_domains_extra.txt.\n'
 )
 DOMAIN = re.compile(r'^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$')
 
@@ -60,11 +64,16 @@ def render(domains):
     return HEADER + ''.join(f'{domain}\n' for domain in domains)
 
 
-def refreshed(source_text, current_text, allow_shrink=False):
-    """The file's new content from the upstream list, or ValueError when it must not replace the current one."""
-    domains = parse(source_text)
-    if len(domains) < MINIMUM:
-        raise ValueError(f'only {len(domains)} domains: the list looks truncated (minimum {MINIMUM})')
+def refreshed(source_text, current_text, allow_shrink=False, extra_text=''):
+    """The file's new content: the upstream list with the extra domains merged in.
+
+    ValueError when it must not replace the current content. `MINIMUM` is asked of the upstream
+    list alone, so the extra domains never hide a truncated download.
+    """
+    upstream = parse(source_text)
+    if len(upstream) < MINIMUM:
+        raise ValueError(f'only {len(upstream)} domains: the list looks truncated (minimum {MINIMUM})')
+    domains = sorted(set(upstream).union(parse(extra_text)))
     protected = sorted(NEVER_BLOCK.intersection(domains))
     if protected:
         raise ValueError(f'the list blocks mail providers {protected}; refusing it')
@@ -86,11 +95,11 @@ def fetch(url=UPSTREAM, opener=urllib.request.urlopen):
     return body.decode('utf-8')
 
 
-def run(args, fetcher=fetch, output=OUTPUT):
+def run(args, fetcher=fetch, output=OUTPUT, extra=EXTRA):
     """Write (or with `--check`, compare) the file; returns the process exit code."""
     source = Path(args.source).read_text(encoding='utf-8') if args.source else fetcher()
     current = output.read_text(encoding='utf-8') if output.exists() else ''
-    updated = refreshed(source, current, args.allow_shrink)
+    updated = refreshed(source, current, args.allow_shrink, extra.read_text(encoding='utf-8'))
     if updated == current:
         print(f'{output.name} is up to date ({len(entries(updated))} domains)')
         return 0

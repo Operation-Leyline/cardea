@@ -156,7 +156,7 @@ pub struct LinkRow {
 /// method the other is taking away. Every write is conditional on the version
 /// it read. A user without the row has not been listed, linked or unlinked
 /// since the row existed. Code older than the row never reads its key.
-#[derive(Debug, Clone, PartialEq, Record)]
+#[derive(Clone, PartialEq, Record)]
 #[tabulary(
     rename_all = "camelCase",
     partition(name = "identityKey", template = "METHODS#{user_id:text}")
@@ -170,6 +170,22 @@ pub struct MethodsRow {
     /// The identities, as one JSON list.
     #[tabulary(with = identities_json)]
     pub identities: Vec<LinkedIdentity>,
+    /// Addresses an erasure learned from the pool that its caller did not
+    /// name, as one JSON list: kept so that a repeat, after the user is gone,
+    /// still finds their mailbox rows. Absent unless there is one.
+    #[tabulary(with = mailboxes_json)]
+    pub erasing_mailboxes: Option<Vec<String>>,
+}
+
+/// Leaves the addresses out, so that printing a row cannot log them.
+impl std::fmt::Debug for MethodsRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MethodsRow")
+            .field("user_id", &self.user_id)
+            .field("version", &self.version)
+            .field("identities", &self.identities)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One identity of a [`MethodsRow`]. Stored as JSON: field names and order are
@@ -235,6 +251,10 @@ mod user_json {
 
 mod identities_json {
     pub type Codec = super::JsonText<Vec<super::LinkedIdentity>>;
+}
+
+mod mailboxes_json {
+    pub type Codec = super::JsonText<Vec<String>>;
 }
 
 #[cfg(test)]
