@@ -34,6 +34,11 @@ pub struct ProviderRule {
     /// only for an address the claims already mark verified, with its
     /// lowercased domain.
     pub owns_mailbox: fn(domain: &str, claims: &Value) -> bool,
+    /// Whether the address is a private relay the provider made for this
+    /// person, which a freshly signed-in account may link although the
+    /// address is not its own. Same arguments as
+    /// [`owns_mailbox`](Self::owns_mailbox). Only clear evidence counts.
+    pub is_private_relay: fn(domain: &str, claims: &Value) -> bool,
 }
 
 static GOOGLE: ProviderRule = ProviderRule {
@@ -44,6 +49,7 @@ static GOOGLE: ProviderRule = ProviderRule {
     issuers: &["https://accounts.google.com", "accounts.google.com"],
     keys_url: "https://www.googleapis.com/oauth2/v3/certs",
     owns_mailbox: google_owns,
+    is_private_relay: no_relay,
 };
 
 static APPLE: ProviderRule = ProviderRule {
@@ -54,6 +60,7 @@ static APPLE: ProviderRule = ProviderRule {
     issuers: &["https://appleid.apple.com"],
     keys_url: "https://appleid.apple.com/auth/keys",
     owns_mailbox: apple_owns,
+    is_private_relay: apple_relay,
 };
 
 /// Gmail, or a Google Workspace account (`hd`).
@@ -63,17 +70,29 @@ fn google_owns(domain: &str, claims: &Value) -> bool {
         || claims["hd"].as_str().is_some_and(|s| !s.trim().is_empty())
 }
 
+/// Google makes no relay addresses.
+fn no_relay(_domain: &str, _claims: &Value) -> bool {
+    false
+}
+
 /// An Apple mailbox that is not a private relay. Apple sends
 /// `is_private_email` as a boolean or a string; any value other than a clear
-/// "no" counts as a relay.
+/// "no" keeps the sign-in from linking automatically.
 fn apple_owns(domain: &str, claims: &Value) -> bool {
-    let relay = !match &claims["is_private_email"] {
+    let denied = match &claims["is_private_email"] {
         Value::Null => true,
         Value::Bool(private) => !private,
         Value::String(private) => private == "false",
         _ => false,
     };
-    !relay && matches!(domain, "icloud.com" | "me.com" | "mac.com")
+    denied && matches!(domain, "icloud.com" | "me.com" | "mac.com")
+}
+
+/// Apple's Hide My Email: `is_private_email` is a clear "yes", or the address
+/// is on the relay's own domain.
+fn apple_relay(domain: &str, claims: &Value) -> bool {
+    let private = &claims["is_private_email"];
+    *private == true || *private == "true" || domain == "privaterelay.appleid.com"
 }
 
 impl Provider {

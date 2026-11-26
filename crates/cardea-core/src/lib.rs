@@ -20,4 +20,4 @@ pub use email::{normalize_email, person_key, same_inbox, same_mailbox};
 pub use error::Error;
 pub use identity::ProviderIdentity;
 pub use provider::{Provider, ProviderRule};
-pub use resolve::resolve;
+pub use resolve::{RECENT_SIGN_IN_SECONDS, Session, resolve};

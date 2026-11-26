@@ -1,5 +1,5 @@
 use super::*;
-use crate::{normalize_email, resolve};
+use crate::{Session, normalize_email, resolve};
 use async_trait::async_trait;
 use std::{
     collections::HashMap,
@@ -123,6 +123,16 @@ fn google(email: &str) -> ProviderIdentity {
         subject: "stable-subject".into(),
         email: email.into(),
         authoritative: true,
+        private_relay: false,
+    }
+}
+/// A session whose sign-in was `age` seconds ago.
+fn signed_in(user: &User, age: i64) -> Session<'_> {
+    const NOW: i64 = 1_800_000_000;
+    Session {
+        user,
+        auth_time: NOW - age,
+        now: NOW,
     }
 }
 fn google_link(subject: &str) -> (Provider, String) {
@@ -181,7 +191,12 @@ async fn google_and_native_sign_in_with_the_same_mailbox_reconcile_to_one_person
         );
         // An authenticated link from the native session names the same person.
         assert_eq!(
-            resolve(&directory, &google(google_email), Some(&original)).await,
+            resolve(
+                &directory,
+                &google(google_email),
+                Some(signed_in(&original, 0))
+            )
+            .await,
             Ok(original.clone()),
             "{google_email}"
         );
@@ -304,11 +319,14 @@ async fn external_email_requires_authenticated_same_account() {
     let mut wrong = user.clone();
     wrong.user_id = "other-user".into();
     assert_eq!(
-        resolve(&directory, &google, Some(&wrong)).await,
+        resolve(&directory, &google, Some(signed_in(&wrong, 0))).await,
         Err(Error::Conflict)
     );
     assert!(directory.0.lock().unwrap().providers.is_empty());
-    assert_eq!(resolve(&directory, &google, Some(&user)).await, Ok(user));
+    assert_eq!(
+        resolve(&directory, &google, Some(signed_in(&user, 0))).await,
+        Ok(user)
+    );
 }
 
 #[tokio::test]
@@ -328,10 +346,16 @@ async fn provider_email_change_never_moves_identity() {
         Ok(original)
     );
     assert_eq!(
-        resolve(&directory, &google(&other.email), Some(&other)).await,
+        resolve(
+            &directory,
+            &google(&other.email),
+            Some(signed_in(&other, 0))
+        )
+        .await,
         Err(Error::Conflict)
     );
     assert_eq!(directory.0.lock().unwrap().creates, 0);
 }
 
 mod apple;
+mod relay;

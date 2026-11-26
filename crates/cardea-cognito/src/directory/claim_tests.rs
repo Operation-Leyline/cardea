@@ -268,6 +268,7 @@ fn google() -> ProviderIdentity {
         subject: "google-subject".into(),
         email: ALIAS.into(),
         authoritative: true,
+        private_relay: false,
     }
 }
 

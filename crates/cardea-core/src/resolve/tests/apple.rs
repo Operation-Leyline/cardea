@@ -84,28 +84,11 @@ async fn another_verified_domain_needs_a_session_link() {
     );
     untouched(&directory);
     assert_eq!(
-        resolve(&directory, &identity, Some(&user)).await,
+        resolve(&directory, &identity, Some(signed_in(&user, 0))).await,
         Ok(user.clone())
     );
     // Once linked from the session, Apple signs in on its own.
     assert_eq!(resolve(&directory, &identity, None).await, Ok(user));
-}
-
-/// A session link names the caller's own mailbox, as it does for Google.
-#[tokio::test]
-async fn a_session_link_for_another_mailbox_is_refused() {
-    let directory = Mock::default();
-    let user = native(&directory, "owner@example.com");
-    for identity in [
-        apple("a", "other@example.com", false),
-        apple("a", "x1y2@privaterelay.appleid.com", true),
-    ] {
-        assert_eq!(
-            resolve(&directory, &identity, Some(&user)).await,
-            Err(Error::Conflict)
-        );
-    }
-    untouched(&directory);
 }
 
 #[tokio::test]
@@ -117,7 +100,7 @@ async fn google_and_apple_share_one_account_and_keep_separate_bindings() {
     // The same subject text under another provider is another identity.
     let identity = apple("stable-subject", "owner@gmail.com", false);
     assert_eq!(
-        resolve(&directory, &identity, Some(&google_first)).await,
+        resolve(&directory, &identity, Some(signed_in(&google_first, 0))).await,
         Ok(google_first)
     );
     let state = directory.0.lock().unwrap();

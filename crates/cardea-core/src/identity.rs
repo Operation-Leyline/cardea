@@ -16,6 +16,10 @@ pub struct ProviderIdentity {
     /// Whether the provider owns the mailbox, so the sign-in may link without
     /// a signed-in session ([`crate::ProviderRule::owns_mailbox`]).
     pub authoritative: bool,
+    /// Whether the address is a private relay made for this person
+    /// ([`crate::ProviderRule::is_private_relay`]). It never links
+    /// automatically; [`crate::resolve`] says when a session may link it.
+    pub private_relay: bool,
 }
 
 impl ProviderIdentity {
@@ -36,12 +40,15 @@ impl ProviderIdentity {
             return Err(Error::Invalid);
         }
         let domain = email.rsplit_once('@').ok_or(Error::Invalid)?.1;
-        let authoritative = (provider.rule().owns_mailbox)(domain, claims);
+        let rule = provider.rule();
+        let authoritative = (rule.owns_mailbox)(domain, claims);
+        let private_relay = (rule.is_private_relay)(domain, claims);
         Ok(Self {
             provider,
             subject,
             email,
             authoritative,
+            private_relay,
         })
     }
 }

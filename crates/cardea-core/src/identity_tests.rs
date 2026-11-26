@@ -86,6 +86,37 @@ fn other_verified_domains_are_not_apples_to_vouch_for() {
 }
 
 #[test]
+fn a_relay_is_apples_flag_or_apples_relay_domain() {
+    let relay = |provider, email: &str, private: Value| {
+        let claims = json!({"sub":"s", "email":email, "email_verified":true,
+            "is_private_email":private});
+        ProviderIdentity::from_verified_claims(provider, &claims)
+            .unwrap()
+            .private_relay
+    };
+    for (email, private, expected) in [
+        ("a@privaterelay.appleid.com", json!(null), true),
+        ("a@privaterelay.appleid.com", json!("false"), true),
+        ("a@example.com", json!(true), true),
+        ("a@example.com", json!("true"), true),
+        ("a@example.com", json!("TRUE"), false),
+        ("a@example.com", json!(1), false),
+        ("a@icloud.com", json!(false), false),
+        ("a@privaterelay.appleid.com.evil.test", json!(null), false),
+    ] {
+        assert_eq!(
+            relay(Provider::Apple, email, private.clone()),
+            expected,
+            "{email} {private}"
+        );
+    }
+    // Apple's claim and domain mean nothing from Google.
+    for email in ["a@privaterelay.appleid.com", "a@gmail.com"] {
+        assert!(!relay(Provider::Google, email, json!(true)));
+    }
+}
+
+#[test]
 fn an_unverified_apple_address_is_refused() {
     for verified in [json!(false), json!("false"), json!(null)] {
         let claims = json!({"sub":"s", "email":"a@icloud.com", "email_verified":verified});

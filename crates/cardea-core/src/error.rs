@@ -12,6 +12,11 @@ pub enum Error {
     /// account first and link the provider from there.
     #[error("sign in with your existing method and link this provider from your profile")]
     LinkRequired,
+    /// The link needs a sign-in no older than
+    /// [`RECENT_SIGN_IN_SECONDS`](crate::RECENT_SIGN_IN_SECONDS). A product
+    /// reports it as `recentSignInRequired`, and the person signs in again.
+    #[error("sign in again, then link this provider")]
+    RecentSignInRequired,
     /// Ownership records disagree. Nothing was created.
     #[error("identity ownership requires recovery; no new account was created")]
     Conflict,
