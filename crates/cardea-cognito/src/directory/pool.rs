@@ -91,7 +91,7 @@ impl AwsDirectory {
     }
 
     /// `user`'s Cognito record, only while it still reads as exactly `user`.
-    async fn same_user(&self, user: &User) -> Result<AdminGetUserOutput, Error> {
+    pub(crate) async fn same_user(&self, user: &User) -> Result<AdminGetUserOutput, Error> {
         let raw = self
             .get_user(&user.username)
             .await?

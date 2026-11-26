@@ -97,6 +97,22 @@ async fn an_unverified_address_does_not_hide_or_hold_the_methods() {
     );
 }
 
+/// No provider signs in to an account with an unverified address, so without a
+/// password there is no other way in to count on.
+#[tokio::test]
+async fn an_unverified_passwordless_account_keeps_every_provider_it_has() {
+    let f = fixture().await;
+    let alice = f.passwordless("alice").await;
+    f.link(&alice, GOOGLE, "google-1").await;
+    f.link(&alice, APPLE, "apple-1").await;
+    f.pool.state().users.get_mut("alice").unwrap().unverified = true;
+    assert_eq!(
+        unlink(&f, &alice, GOOGLE).await,
+        Err(OperationError::LastSignInMethod)
+    );
+    assert_eq!(f.identities("alice").len(), 2);
+}
+
 #[tokio::test]
 async fn an_unconfirmed_user_changes_nothing() {
     let (f, alice) = password_and_google().await;

@@ -111,6 +111,35 @@ async fn a_first_sign_in_lists_every_identity_the_pool_links() {
     );
 }
 
+/// The pre-signup trigger links without an address; the first list is saved all
+/// the same.
+#[tokio::test]
+async fn a_first_link_that_adds_nothing_still_saves_the_list() {
+    let f = fixture().await;
+    let alice = f.account("alice", "Cognito").await;
+    f.pool_link("alice", GOOGLE, "google-1");
+    f.directory
+        .claim_provider(GOOGLE, "google-1", &alice)
+        .await
+        .unwrap();
+
+    f.directory
+        .pre_signup(external_sign_up(GOOGLE, "google-1"))
+        .await
+        .unwrap();
+
+    let saved = (
+        1,
+        r#"[{"provider":"Google","subject":"google-1"}]"#.to_owned(),
+    );
+    assert_eq!(stored(&f, &alice).await, Some(saved.clone()));
+    f.directory
+        .pre_signup(external_sign_up(GOOGLE, "google-1"))
+        .await
+        .unwrap();
+    assert_eq!(stored(&f, &alice).await, Some(saved));
+}
+
 #[tokio::test]
 async fn an_unlinked_identity_no_longer_signs_in() {
     let f = fixture().await;

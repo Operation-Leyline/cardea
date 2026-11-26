@@ -103,8 +103,9 @@ impl AwsDirectory {
 
     /// Whether an identity of another provider would still sign `user` in:
     /// the pool links it, no unlink of it is under way, and its binding names
-    /// `user`. A sign-in through an unbound identity can be refused, so such a
-    /// one is not counted on.
+    /// `user`. A sign-in through an unbound identity can be refused, and every
+    /// provider sign-in is refused while the account's address is unverified,
+    /// so neither is counted on.
     async fn another_signs_in(
         &self,
         user: &User,
@@ -112,6 +113,12 @@ impl AwsDirectory {
         linked: &[Identity],
         list: &MethodsRow,
     ) -> Result<bool, Error> {
+        // The test a provider sign-in puts the account to.
+        match self.same_user(user).await {
+            Ok(_) => {}
+            Err(Error::LinkRequired) => return Ok(false),
+            Err(error) => return Err(error),
+        }
         for other in linked {
             if other.provider != removing
                 && !list.is_removing(other)

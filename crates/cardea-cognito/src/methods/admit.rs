@@ -30,6 +30,7 @@ impl AwsDirectory {
         for _ in 0..ATTEMPTS {
             let read = self.methods_row(user).await?;
             let version = read.as_ref().map_or(0, |row| row.version);
+            let stored = read.is_some();
             let mut next = match read {
                 Some(row) => row,
                 // The first list holds what the pool already links, too.
@@ -42,9 +43,11 @@ impl AwsDirectory {
                 }
                 return Err(Error::NotReady);
             }
-            if next
-                .find(&identity)
-                .is_some_and(|entry| email.is_none() || entry.email.as_deref() == email)
+            // A first list is saved even when this link adds nothing to it.
+            if stored
+                && next
+                    .find(&identity)
+                    .is_some_and(|entry| email.is_none() || entry.email.as_deref() == email)
             {
                 return Ok(());
             }
