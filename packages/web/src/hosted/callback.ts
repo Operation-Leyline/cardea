@@ -12,13 +12,17 @@ import type { Verifier } from "./verify.js";
  */
 export type ConfirmProviderSession = (candidate: { idToken: string; subject: string }) => Promise<void>;
 
-/** Turns the returning URL into a verified session that is not saved yet. */
+/**
+ * Turns the returning URL into a verified session that is not saved yet.
+ * `generation` is the sign-in mark now: it must be the one the person left with.
+ */
 export async function exchangeCallback(
   config: ResolvedConfig,
   callback: URL,
   storage: () => Storage,
   verify: Verifier,
   confirm: ConfirmProviderSession | undefined,
+  generation: string | null,
 ): Promise<{ record: StoredSession; returnTo: string }> {
   let returnTo = "/";
   // The stage names the failure. Raw causes can carry identity details, so they stop here.
@@ -26,6 +30,8 @@ export async function exchangeCallback(
   try {
     const attempt = consumeAttempt(config, callback, storage);
     returnTo = safeReturnPath(attempt.returnTo, callback.origin, config.callbackPath);
+    // Someone signed in or out, in any tab, while the person was at the provider.
+    if (attempt.generation !== generation) throw new CardeaError("session-superseded");
     if (callback.searchParams.has("error")) throw new CardeaError("provider-refused");
     const codes = callback.searchParams.getAll("code");
     if (codes.length !== 1 || !codes[0]) throw new CardeaError("attempt-invalid");

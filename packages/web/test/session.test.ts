@@ -91,6 +91,16 @@ describe("refresh", () => {
     expect(client.getState().error).toBeNull();
   });
 
+  it("sends no refresh token anywhere once the hosted domain is no longer configured", async () => {
+    const cognito = installFakeCognito();
+    localStorage.setItem(SESSION_KEY, await storedSession({ method: "Google", expiresIn: -10 }));
+    const { loginDomain: _unused, providers: _also, ...bare } = CONFIG;
+    const client = createCardeaClient(bare);
+    await expect(client.getIdToken()).rejects.toMatchObject({ code: "refresh-failed" });
+    expect(cognito.fetcher).not.toHaveBeenCalled();
+    expect(client.currentSession()?.subject).toBe("ada");
+  });
+
   it("ends a provider session whose refresh token was revoked", async () => {
     const { cognito, client, events } = await signedIn({ ...STALE, method: "Apple" });
     cognito.onToken(async () => Response.json({ error: "invalid_grant" }, { status: 400 }));

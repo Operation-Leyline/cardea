@@ -232,6 +232,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
         attemptStorage,
         verify,
         options.confirmProviderSession,
+        store.generation(),
       );
       accept(record, started, returnTo);
       return { returnTo };
@@ -307,7 +308,7 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     async signInWithProvider(provider, { returnTo } = {}) {
       const here = new URL(window.location.href);
       const target = returnTo ?? `${here.pathname}${here.search}${here.hash}`;
-      redirect(await startAttempt(config, provider, here, target, attemptStorage));
+      redirect(await startAttempt(config, provider, here, target, attemptStorage, store.generation()));
     },
     signOut({ hosted } = {}) {
       const method = store.read().record?.method;

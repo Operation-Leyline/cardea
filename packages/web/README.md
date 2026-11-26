@@ -168,8 +168,10 @@ await linking.linkProvider("Google", { container });
   `recent-sign-in-required` and `useLinkProvider().recentSignInRequired` is
   true. Ask the person to sign in again: for a password session call `signIn`,
   then `confirm` once more; for a provider session call `signOut`, which also
-  ends the hosted session, then sign in and `prepare` a new link. The
-  `IdentityLinkAdapter` doc comment says how to report the product's error.
+  ends the hosted session and resets the hook, then sign in and `prepare` a new
+  link. A challenge lasts five minutes, so if the second `confirm` fails with
+  the product's own error, `prepare` again. The `IdentityLinkAdapter` doc
+  comment says how to report the product's error.
 - "Set a password" is `requestPasswordSetup` then `completePasswordSetup`.
   If Cognito will not send the code, `requestPasswordSetup` rejects.
 

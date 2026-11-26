@@ -18,6 +18,8 @@ export interface Attempt {
   clientId: string;
   issuer: string;
   domain: string;
+  /** The sign-in mark when the person left; see `SessionStore.generation`. */
+  generation: string | null;
 }
 
 /** Saves a fresh attempt in tab storage and returns the authorization URL. */
@@ -27,6 +29,7 @@ export async function startAttempt(
   location: URL,
   returnTo: string,
   storage: () => Storage,
+  generation: string | null,
 ): Promise<string> {
   if (!config.loginDomain || !config.providers.includes(provider)) throw new CardeaError("provider-unavailable");
   const attempt: Attempt = {
@@ -40,6 +43,7 @@ export async function startAttempt(
     clientId: config.clientId,
     issuer: config.issuer,
     domain: config.loginDomain,
+    generation,
   };
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(attempt.verifier));
   // A callback without its proof cannot succeed, so a refused write stops here.

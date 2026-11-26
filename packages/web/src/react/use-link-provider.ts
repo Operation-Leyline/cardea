@@ -20,7 +20,8 @@ const IDLE: View = { status: "idle", provider: null, error: null };
  * retries the same request; `prepare` starts a new one.
  *
  * `recentSignInRequired` means the link was refused until the person signs in
- * again. Once they have, `confirm` retries; after a page load, `prepare` again.
+ * again. After a password sign-in, `confirm` retries. A provider session has to
+ * sign out first, which resets this hook: `prepare` again afterwards.
  */
 export function useLinkProvider() {
   const { client } = useCardea();

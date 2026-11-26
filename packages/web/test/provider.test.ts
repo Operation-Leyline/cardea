@@ -214,6 +214,34 @@ describe("coming back", () => {
     expect(other.currentSession()?.subject ?? null).toBe(subject);
   });
 
+  it.each([
+    ["signed out", null],
+    ["signed in", "grace"],
+  ])("yields to another tab that %s while the person was at the provider", async (_name, subject) => {
+    const { cognito, query, nonce } = await leave();
+    cognito.onToken(async () => Response.json(await issueTokens({ nonce })));
+    // Another tab shares localStorage but has tab storage of its own.
+    const attemptStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} } as unknown as Storage;
+    const other = createCardeaClient(CONFIG, { redirect: () => {}, attemptStorage });
+    cognito.operations.RespondToAuthChallenge = async () =>
+      authenticationResult(await issueTokens({ subject: "grace" }));
+    if (subject) await other.signIn("grace@example.test", "Correct-Horse-12");
+    else other.signOut();
+    const { client, result } = comeBack(query);
+    await expect(result).resolves.toMatchObject({ returnTo: RETURN, error: { code: "session-superseded" } });
+    expect(cognito.tokenRequests).toEqual([]);
+    expect(client.currentSession()?.subject ?? null).toBe(subject);
+    expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
+  });
+
+  it("completes when this browser had signed in or out before the person left", async () => {
+    installFakeCognito();
+    createCardeaClient(CONFIG, { redirect: () => {} }).signOut();
+    const { cognito, query, nonce } = await leave();
+    cognito.onToken(async () => Response.json(await issueTokens({ nonce })));
+    await expect(comeBack(query).result).resolves.toEqual({ returnTo: RETURN });
+  });
+
   it("completes although another tab refreshed the previous session meanwhile", async () => {
     const { cognito, query, nonce } = await leave();
     localStorage.setItem(SESSION_KEY, await storedSession({ subject: "grace", expiresIn: -10 }));

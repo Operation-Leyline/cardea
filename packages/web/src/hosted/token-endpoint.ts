@@ -10,6 +10,8 @@ export interface TokenResponse {
 
 /** One request to the hosted `/oauth2/token` endpoint, as a public client. */
 export async function requestTokens(config: ResolvedConfig, body: Record<string, string>): Promise<TokenResponse> {
+  // A saved provider session can outlive the setting. Never send its token anywhere else.
+  if (!config.loginDomain) throw new CardeaError("provider-unavailable");
   const response = await fetch(`${config.loginDomain}/oauth2/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
