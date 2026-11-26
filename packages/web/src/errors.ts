@@ -1,7 +1,8 @@
 /**
  * The failures this package reports itself. Errors from Cognito and from the
  * product's adapter are passed through unchanged, so the product keeps their
- * names.
+ * names, except the one that asks for a recent sign-in (see
+ * `IdentityLinkAdapter`).
  */
 const MESSAGES = {
   "not-configured": "Sign-in is not configured.",
@@ -22,6 +23,7 @@ const MESSAGES = {
   "proof-cancelled": "Linking was cancelled.",
   "proof-failed": "The provider could not confirm your identity.",
   "nonce-mismatch": "The provider's answer belongs to a different request.",
+  "recent-sign-in-required": "Sign in again, then retry linking.",
 } as const;
 
 export type CardeaErrorCode = keyof typeof MESSAGES;

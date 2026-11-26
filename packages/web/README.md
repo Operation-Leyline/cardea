@@ -163,6 +163,13 @@ await linking.linkProvider("Google", { container });
 - For Apple, call `confirm` straight from a click, or the popup may be blocked.
 - After a failed completion, `confirm` resends the same token. Prepare again
   to start over.
+- Linking some identities, such as an Apple relay address (Hide My Email),
+  needs a recent sign-in. `confirm` then rejects with
+  `recent-sign-in-required` and `useLinkProvider().recentSignInRequired` is
+  true. Ask the person to sign in again: for a password session call `signIn`,
+  then `confirm` once more; for a provider session call `signOut`, which also
+  ends the hosted session, then sign in and `prepare` a new link. The
+  `IdentityLinkAdapter` doc comment says how to report the product's error.
 - "Set a password" is `requestPasswordSetup` then `completePasswordSetup`.
   If Cognito will not send the code, `requestPasswordSetup` rejects.
 
@@ -185,7 +192,7 @@ Services ID (`appleRedirectUri`, default the origin followed by `/`).
 | `useSession()` | `status` (`loading`, `signedIn`, `signedOut`), `session`, `error`, `signOut`, token getters, `retry` |
 | `useSignIn()` | The current `step`, `pending`, `error`, and every sign-in, sign-up and recovery action. After confirming a sign-up it signs in with the password already typed, which it holds in memory only |
 | `useSignInMethods()` | `methods`, `hasPassword`, `loading`, `error`, `refresh`, `unlink`, password setup |
-| `useLinkProvider()` | `status`, `prepare`, `confirm`, `link`, `reset` |
+| `useLinkProvider()` | `status`, `error`, `recentSignInRequired`, `prepare`, `confirm`, `link`, `reset` |
 
 ## Development
 

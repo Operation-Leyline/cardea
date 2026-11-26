@@ -232,6 +232,36 @@ describe("linking hooks", () => {
     expect(third.request).not.toHaveBeenCalled();
   });
 
+  it("says when a link needs a recent sign-in, and retries after one", async () => {
+    installFakeCognito();
+    localStorage.setItem(SESSION_KEY, await storedSession());
+    const token = (await issueTokens({ nonce: "n" })).id_token;
+    const source = { load: async () => {}, request: async () => token };
+    const adapter = fakeAdapter();
+    const complete = adapter.completeIdentityLink;
+    let recent = false;
+    adapter.completeIdentityLink = async (input) => {
+      if (!recent) throw Object.assign(new Error("stale"), { name: "recentSignInRequired" });
+      return complete(input);
+    };
+    const { result } = render(() => ({ link: useLinkProvider(), form: useSignIn() }), {
+      linkAdapter: adapter,
+      proofSources: { Apple: source },
+    });
+    await act(() => result.current.link.prepare("Apple"));
+    expect(result.current.link.recentSignInRequired).toBe(false);
+    await act(async () => {
+      await expect(result.current.link.confirm()).rejects.toMatchObject({ code: "recent-sign-in-required" });
+    });
+    expect(result.current.link).toMatchObject({ status: "failed", recentSignInRequired: true });
+
+    // Signing the same person in again keeps the prepared link.
+    await act(() => result.current.form.signIn("ada@example.test", PASSWORD));
+    recent = true;
+    await act(() => result.current.link.confirm());
+    expect(result.current.link).toMatchObject({ status: "linked", recentSignInRequired: false });
+  });
+
   it("shows a failed link and refuses to confirm before preparing", async () => {
     installFakeCognito();
     localStorage.setItem(SESSION_KEY, await storedSession());

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CardeaError,
   createCardeaClient,
   createLinking,
   type IdentityLinkAdapter,
@@ -152,6 +153,26 @@ describe("linking a provider", () => {
     adapter.completeIdentityLink.mockResolvedValueOnce({ userId: "mallory" });
     await expect(linking.linkProvider("Google")).rejects.toMatchObject({ code: "account-mismatch" });
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a name", Object.assign(new Error("stale"), { name: "RecentSignInRequired" })],
+    ["a code", { code: "recentSignInRequired" }],
+    ["the adapter's own mapping", new CardeaError("recent-sign-in-required")],
+  ])("asks for a recent sign-in when the product reports it by %s, then retries", async (_how, refusal) => {
+    const { adapter, source, linking, changed } = await setup();
+    adapter.completeIdentityLink.mockRejectedValueOnce(refusal);
+    const link = await linking.prepareLink("Apple");
+    const failed = link.confirm();
+    await expect(failed).rejects.toBeInstanceOf(CardeaError);
+    await expect(failed).rejects.toMatchObject({ code: "recent-sign-in-required" });
+    expect(changed).not.toHaveBeenCalled();
+    // A fresh session for the same person, then the same token again.
+    localStorage.setItem(SESSION_KEY, await storedSession());
+    await expect(link.confirm()).resolves.toEqual({ userId: "ada" });
+    expect(source.request).toHaveBeenCalledOnce();
+    const [[first], [second]] = adapter.completeIdentityLink.mock.calls;
+    expect(second).toEqual(first);
   });
 
   it("passes the product's own errors through", async () => {

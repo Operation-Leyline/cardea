@@ -18,6 +18,9 @@ const IDLE: View = { status: "idle", provider: null, error: null };
  * Adding a provider from settings: `prepare`, then `confirm` from a click (for
  * Google, with the element its button goes in). After a failure, `confirm`
  * retries the same request; `prepare` starts a new one.
+ *
+ * `recentSignInRequired` means the link was refused until the person signs in
+ * again. Once they have, `confirm` retries; after a page load, `prepare` again.
  */
 export function useLinkProvider() {
   const { client } = useCardea();
@@ -87,6 +90,7 @@ export function useLinkProvider() {
 
   return {
     ...view,
+    recentSignInRequired: view.error instanceof CardeaError && view.error.code === "recent-sign-in-required",
     prepare,
     confirm,
     /** Both steps at once. Not for Apple, whose popup needs its own click. */

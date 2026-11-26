@@ -134,7 +134,11 @@ export function createLinking(options: LinkingOptions): Linking {
       sameAccount(session);
       if (!proof) proof = await obtainProof(source, challenge, expiresAt.getTime(), confirm);
       sameAccount(session);
-      const completed = await adapter.completeIdentityLink({ linkId: challenge.linkId, idToken: proof });
+      const completed = await adapter
+        .completeIdentityLink({ linkId: challenge.linkId, idToken: proof })
+        .catch((error: unknown) => {
+          throw asksForRecentSignIn(error) ? new CardeaError("recent-sign-in-required") : error;
+        });
       sameAccount(session);
       proof = undefined;
       if (completed.userId !== session.userId) throw new CardeaError("account-mismatch");
@@ -188,6 +192,12 @@ export function createLinking(options: LinkingOptions): Linking {
       return () => void listeners.delete(listener);
     },
   };
+}
+
+/** Whether the product's error is the operation's `recentSignInRequired`. */
+function asksForRecentSignIn(error: unknown): boolean {
+  const { name, code } = (error ?? {}) as { name?: unknown; code?: unknown };
+  return [name, code].some((value) => typeof value === "string" && value.toLowerCase() === "recentsigninrequired");
 }
 
 function nonceOf(idToken: string): unknown {
