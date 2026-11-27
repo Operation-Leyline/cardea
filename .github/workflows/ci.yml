@@ -68,12 +68,13 @@ jobs:
         include:
           - name: debug
             run: cargo test --workspace --all-features
-          # The build without tests leaves out what dev-dependencies turn on,
-          # as a product's own build does.
+          # The builds without tests leave out what dev-dependencies turn on,
+          # as a product's own build does. The last has default features only.
           - name: release
             run: |
               cargo test --workspace --all-features --release
               cargo build --workspace --all-features --release
+              cargo build --workspace --release
           # `downstream` stands for the Lambda a product deploys.
           - name: arm64
             run: |
