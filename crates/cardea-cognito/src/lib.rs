@@ -8,6 +8,9 @@
 //! A product implements [`triggers::Product`] and calls [`triggers::run`].
 //! The rules these act on are [`cardea_core`]'s.
 
+// The AWS SDKs' futures nest deeply: Rust 1.97.1 overflows the default 128 laying them out.
+#![recursion_limit = "256"]
+
 pub mod backfill;
 mod cause;
 pub mod directory;

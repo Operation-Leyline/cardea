@@ -191,7 +191,8 @@ impl EmailSender {
         // of one already counted spends nothing, so retries after a failed
         // send cannot drain a recipient's budget.
         if let Some(counter) = kind.counter() {
-            budget::spend(
+            // Boxed for the reason `triggers::handle` boxes its dispatch.
+            Box::pin(budget::spend(
                 &self.ddb,
                 &self.budget_table,
                 &budget_key,
@@ -199,7 +200,7 @@ impl EmailSender {
                 &key,
                 counter,
                 time,
-            )
+            ))
             .await?;
         }
         let code = match kind {

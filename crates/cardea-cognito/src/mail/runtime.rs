@@ -92,8 +92,10 @@ impl EmailSender {
             None => KeyFrom::Secret(required(&variable, SECRET_VARIABLE)?),
         };
         let ddb = aws_sdk_dynamodb::Client::new(config);
-        let decryptor =
-            KmsDecryptor::new(aws_sdk_kms::Client::new(config), settings.email_key).await?;
+        // Boxed: the Encryption SDK's setup future is deep enough to overflow
+        // the default recursion limit of a product's own crate on Rust 1.97.1.
+        let kms = aws_sdk_kms::Client::new(config);
+        let decryptor = Box::pin(KmsDecryptor::new(kms, settings.email_key)).await?;
         Ok(match key {
             KeyFrom::Product(source) => {
                 Self::with_key_source(ddb, settings.table, source, decryptor)

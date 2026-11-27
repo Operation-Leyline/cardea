@@ -56,6 +56,51 @@ jobs:
         if: steps.crates.outputs.present == 'true'
         run: cargo test --workspace
 
+  # The minimum supported Rust, `rust-version` in Cargo.toml. Release too:
+  # whether a deeply nested future compiles can depend on the profile.
+  rust-minimum:
+    name: Rust 1.97.1 (${{ matrix.name }})
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debug
+            run: cargo test --workspace --all-features
+          # The builds without tests leave out what dev-dependencies turn on,
+          # as a product's own build does. The last has default features only.
+          - name: release
+            run: |
+              cargo test --workspace --all-features --release
+              cargo build --workspace --all-features --release
+              cargo build --workspace --release
+          # `downstream` stands for the Lambda a product deploys.
+          - name: arm64
+            run: |
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+              cargo build --workspace --all-features --release --bins --target aarch64-unknown-linux-gnu
+              cargo build -p cardea-cognito --all-features --release --example downstream --target aarch64-unknown-linux-gnu
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.97.1
+          targets: aarch64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build and test
+        run: ${{ matrix.run }}
+
   node:
     name: Node
     runs-on: ubicloud-standard-2

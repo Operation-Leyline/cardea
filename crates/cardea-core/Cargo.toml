@@ -3,6 +3,7 @@ name = "cardea-core"
 description = "Pure identity rules: the person key, providers, resolution and errors"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
