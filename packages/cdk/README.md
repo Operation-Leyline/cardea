@@ -231,9 +231,12 @@ put it in its own `iam.Policy` attached to the function's role.
 
 When `customEmailSender.handler` is not `triggers.handler`, the construct grants
 that function `kms:Decrypt` on the email key and
-`secretsmanager:GetSecretValue` on the mail budget key secret, in a policy the
-function does not depend on, and nothing else. The trigger function gets neither.
-The Cardea sender reads neither the directory nor the pool.
+`secretsmanager:GetSecretValue` on the mail budget key secret, and nothing else.
+The decrypt grant is in a policy the function does not depend on. The secret
+grant is in one it does depend on, when it is a `lambda.Function` in the pool's
+stack, so that the grant is in place before the function is updated. The trigger
+function gets neither. The Cardea sender reads neither the directory nor the
+pool.
 
 | Environment variable | Set by |
 |---|---|
@@ -702,6 +705,9 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   and in no other function's. Add `kms:Decrypt` on its key if that is customer
   managed.
 - No rotation schedule: see [The mail budget key](#the-mail-budget-key).
+- The secret, the variable and the grant in place before the sender code that
+  reads them runs: in Pulumi, make the function `dependsOn` the role policy, or
+  deploy them first.
 
 **Directory table**
 

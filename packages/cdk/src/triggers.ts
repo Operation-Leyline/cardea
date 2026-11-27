@@ -109,8 +109,10 @@ export function wireInboundFederation(userPool: cognito.UserPool, handler: lambd
  * pool closes a loop CloudFormation refuses to deploy. A function depends on
  * its role and the role's default policy, which is where `addToRolePolicy` and
  * `grant*` put statements. These go in separate policy resources that nothing
- * depends on, so they can name this one pool. Keeping the table and key grants
- * there too avoids the same loop between stacks.
+ * depends on, so they can name this one pool. Keeping the table and email key
+ * grants there too avoids the same loop between stacks. The mail budget key's
+ * grant is the exception, in a policy the sender does depend on
+ * ({@link grantMailBudgetKey}).
  */
 export function grantTriggers(
   scope: Construct,
