@@ -4,13 +4,23 @@ import { loadScript } from "./script.js";
 
 export const GOOGLE_SCRIPT = "https://accounts.google.com/gsi/client";
 
-/** The part of Google Identity Services used here. */
-interface GoogleIdentity {
-  initialize(options: Record<string, unknown>): void;
-  renderButton(parent: HTMLElement, options: Record<string, unknown>): void;
+/** What the One Tap prompt reports. With FedCM some of these are absent. */
+export interface PromptMoment {
+  isNotDisplayed?(): boolean;
+  isSkippedMoment?(): boolean;
+  isDismissedMoment?(): boolean;
+  getDismissedReason?(): string;
 }
 
-function library(): GoogleIdentity | undefined {
+/** The part of Google Identity Services used here and for native sign-in. */
+export interface GoogleIdentity {
+  initialize(options: Record<string, unknown>): void;
+  renderButton(parent: HTMLElement, options: Record<string, unknown>): void;
+  prompt(listener: (moment: PromptMoment) => void): void;
+  cancel?(): void;
+}
+
+export function googleLibrary(): GoogleIdentity | undefined {
   return (window as { google?: { accounts?: { id?: GoogleIdentity } } }).google?.accounts?.id;
 }
 
@@ -22,10 +32,10 @@ function library(): GoogleIdentity | undefined {
 export function googleProofSource(button: Record<string, unknown> = {}): ProofSource {
   return {
     async load() {
-      await loadScript(GOOGLE_SCRIPT, library);
+      await loadScript(GOOGLE_SCRIPT, googleLibrary);
     },
     request({ clientId, nonce, signal, container }) {
-      const google = library();
+      const google = googleLibrary();
       if (!google || !container) return Promise.reject(new CardeaError("proof-failed"));
       if (signal.aborted) return Promise.reject(signal.reason);
       // Google draws in an element of our own, so removing it leaves the caller's content alone.

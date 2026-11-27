@@ -8,6 +8,11 @@ export type SessionMethod = "password" | Provider;
 export interface StoredSession {
   version: 1;
   method: SessionMethod;
+  /**
+   * A provider sign-in made natively: its tokens came from the user pool's API,
+   * so they are refreshed there and no hosted session goes with them.
+   */
+  native?: true;
   username: string;
   idToken: string;
   accessToken: string;

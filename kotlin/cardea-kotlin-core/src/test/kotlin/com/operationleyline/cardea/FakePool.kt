@@ -33,6 +33,7 @@ import okhttp3.mockwebserver.RecordedRequest
 
 const val LOOPBACK_REDIRECT = "http://127.0.0.1/callback"
 const val APP_REDIRECT = "com.example.app://auth/callback"
+const val TICKET = "ticket-1"
 
 fun testConfig(
     redirectUri: String = APP_REDIRECT,
@@ -78,6 +79,12 @@ class FakePool(val clock: TestClock = TestClock(), config: CardeaConfig = testCo
     val mint = Mint()
     val tokenRequests = CopyOnWriteArrayList<Map<String, String>>()
 
+    /** The user pool API's calls: the operation and its input. */
+    val poolCalls = CopyOnWriteArrayList<Pair<String, Map<String, Any?>>>()
+
+    /** Replaces the user pool API's answer to a call, unless it returns `null`. */
+    @Volatile var poolAnswer: ((String) -> MockResponse?)? = null
+
     /** Replaces the answer of the token endpoint. */
     @Volatile var tokenAnswer: (() -> MockResponse)? = null
 
@@ -95,6 +102,12 @@ class FakePool(val clock: TestClock = TestClock(), config: CardeaConfig = testCo
                 "/jwks.json" ->
                     if (keysDown) MockResponse().setResponseCode(503)
                     else MockResponse().setBody(JWKSet(key.toPublicJWK()).toString())
+                "/idp/" -> {
+                    val operation = request.getHeader("X-Amz-Target")!!.substringAfter('.')
+                    val input = parseJsonObject(request.body.readUtf8())!!
+                    poolCalls.add(operation to input)
+                    poolAnswer?.invoke(operation) ?: userPool(operation, input)
+                }
                 "/oauth2/token" -> {
                     tokenRequests.add(
                         decodeQuery(request.body.readUtf8())!!.mapValues { it.value.single() },
@@ -118,9 +131,37 @@ class FakePool(val clock: TestClock = TestClock(), config: CardeaConfig = testCo
         sessions,
         attempts,
         check,
-        Endpoints(token = server.url("/oauth2/token").toString(), keys = server.url("/jwks.json").toString()),
+        Endpoints(
+            token = server.url("/oauth2/token").toString(),
+            keys = server.url("/jwks.json").toString(),
+            userPool = server.url("/idp/").toString(),
+        ),
         clock,
     )
+
+    /** The custom challenge, its right answer [TICKET], and refresh. */
+    private fun userPool(operation: String, input: Map<String, Any?>): MockResponse = when {
+        input["AuthFlow"] == "CUSTOM_AUTH" -> json(
+            "ChallengeName" to "CUSTOM_CHALLENGE",
+            "Session" to "pool-session",
+            "ChallengeParameters" to mapOf("challenge" to "PROVIDER_TICKET", "USERNAME" to "name-in-pool"),
+        )
+        input["AuthFlow"] == "REFRESH_TOKEN_AUTH" -> authentication(refresh = null)
+        operation == "RespondToAuthChallenge" &&
+            (input["ChallengeResponses"] as Map<*, *>)["ANSWER"] == TICKET -> authentication(mint.refreshToken)
+        else -> refusal("NotAuthorizedException")
+    }
+
+    private fun authentication(refresh: String?): MockResponse {
+        val result = mutableMapOf<String, Any?>("IdToken" to idToken(), "AccessToken" to accessToken())
+        refresh?.let { result["RefreshToken"] = it }
+        return json("AuthenticationResult" to result)
+    }
+
+    fun json(vararg fields: Pair<String, Any?>): MockResponse = MockResponse().setBody(writeJsonObject(mapOf(*fields)))
+
+    fun refusal(type: String, status: Int = 400): MockResponse =
+        json("__type" to type).setResponseCode(status)
 
     fun tokens(): MockResponse {
         val fields = mutableMapOf<String, Any?>("id_token" to idToken(), "access_token" to accessToken())

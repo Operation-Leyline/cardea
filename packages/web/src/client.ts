@@ -10,8 +10,10 @@ import { logoutUrl } from "./hosted/logout.js";
 import { providerTokenSource } from "./hosted/refresh.js";
 import { createVerifier } from "./hosted/verify.js";
 import { forgetLegacySessions, importLegacySession } from "./legacy/import.js";
+import type { ProviderSignInAdapter } from "./native/adapter.js";
+import { nativeGoogleSignIn, type GoogleSignInOptions } from "./native/google-sign-in.js";
 import type { Provider } from "./providers.js";
-import { justIssued, toSession, usernameOf, type Session, type SessionMethod, type StoredSession } from "./session/record.js";
+import { justIssued, toSession, usernameOf, type Session, type StoredSession } from "./session/record.js";
 import { createRefresher } from "./session/refresh.js";
 import { SessionStore, type SessionEvent } from "./session/store.js";
 
@@ -23,6 +25,8 @@ export interface ClientOptions {
   /** How to leave the page. Default `location.assign`. */
   redirect?: (url: string) => void;
   confirmProviderSession?: ConfirmProviderSession;
+  /** The product's API for native sign-in, which `signInWithGoogle` needs. */
+  providerSignIn?: ProviderSignInAdapter;
 }
 
 /** What a view needs to decide what to draw. */
@@ -39,6 +43,12 @@ export interface StartResult {
   returnTo?: string;
   error?: CardeaError;
 }
+
+/** What `signInWithGoogle` came to. `redirecting`: the page is leaving for the hosted sign-in. */
+export type GoogleSignInResult =
+  | { status: "signedIn"; session: Session }
+  | { status: "dismissed" }
+  | { status: "redirecting" };
 
 /** The outcome of one password sign-in step. */
 export type SignInResult =
@@ -77,6 +87,14 @@ export interface CardeaClient {
   /** Leaves for the provider. `returnTo` defaults to the current page. */
   signInWithProvider(provider: Provider, options?: { returnTo?: string }): Promise<void>;
   /**
+   * Signs in with Google without leaving the page, through Google Identity
+   * Services and the pool's custom authentication flow. In popup mode this
+   * resolves once the person has pressed the button and picked an account.
+   * Google keeps one set of settings per page, so run one at a time, and not
+   * beside a Google linking button.
+   */
+  signInWithGoogle(options: GoogleSignInOptions): Promise<GoogleSignInResult>;
+  /**
    * Clears this browser's session. `hosted` also ends the hosted domain's
    * session by redirecting there; it defaults to true for provider sessions.
    */
@@ -97,7 +115,9 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   const verify = createVerifier(config);
   const fromPassword = passwordTokenSource(config);
   const fromProvider = providerTokenSource(config, verify);
-  const tokenSource = (method: SessionMethod) => (method === "password" ? fromPassword : fromProvider);
+  // Native provider sessions hold tokens of the user pool's API, as password sessions do.
+  const tokenSource = ({ method, native }: Pick<StoredSession, "method" | "native">) =>
+    method === "password" || native ? fromPassword : fromProvider;
   const usable = createRefresher(store, tokenSource);
   const forgetLegacy = () => forgetLegacySessions(config, storage);
   // Once a session has been saved or ended, here or in another tab, an old one must not return.
@@ -248,6 +268,54 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     }
   }
 
+  async function leaveFor(provider: Provider, returnTo?: string, signal?: AbortSignal): Promise<void> {
+    const here = new URL(window.location.href);
+    const target = returnTo ?? `${here.pathname}${here.search}${here.hash}`;
+    const url = await startAttempt(config, provider, here, target, attemptStorage, store.generation(), signal);
+    if (signal?.aborted) throw signal.reason;
+    redirect(url);
+  }
+
+  async function signInWithGoogle(wanted: GoogleSignInOptions): Promise<GoogleSignInResult> {
+    if (wanted.mode === "popup" && !wanted.container) throw new CardeaError("not-configured");
+    const started = mark();
+    const controller = new AbortController();
+    const cancel = () => controller.abort(new CardeaError("sign-in-cancelled"));
+    // Someone signing in or out ends this one. An old session expiring is
+    // neither, and from another tab it looks like a sign-out that left no mark.
+    const unsubscribe = store.subscribe((event) => {
+      if (event.type === "signedOut" && started === mark()) return;
+      controller.abort(new CardeaError("session-superseded"));
+    });
+    wanted.signal?.addEventListener("abort", cancel, { once: true });
+    if (wanted.signal?.aborted) cancel();
+    try {
+      const outcome = await nativeGoogleSignIn(
+        {
+          config,
+          adapter: options.providerSignIn,
+          verify,
+          confirm: options.confirmProviderSession,
+          assertCurrent: () => assertCurrent(started),
+        },
+        wanted,
+        controller.signal,
+      );
+      // Given up at the last moment: nothing is saved and nobody is sent away.
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (outcome === "dismissed") return { status: "dismissed" };
+      if (outcome === "redirect") {
+        await leaveFor("Google", wanted.returnTo, controller.signal);
+        return { status: "redirecting" };
+      }
+      settleImport();
+      return { status: "signedIn", session: accept(outcome.record, started) };
+    } finally {
+      unsubscribe();
+      wanted.signal?.removeEventListener("abort", cancel);
+    }
+  }
+
   async function run(): Promise<StartResult> {
     let result: StartResult = {};
     const callback = providerReturn();
@@ -311,13 +379,10 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     requestPasswordReset: (email) => account.requestPasswordReset(config, email.trim()),
     resetPassword: (email, code, password) =>
       account.resetPassword(config, email.trim(), code.replace(/\s/g, ""), password),
-    async signInWithProvider(provider, { returnTo } = {}) {
-      const here = new URL(window.location.href);
-      const target = returnTo ?? `${here.pathname}${here.search}${here.hash}`;
-      redirect(await startAttempt(config, provider, here, target, attemptStorage, store.generation()));
-    },
+    signInWithProvider: (provider, { returnTo } = {}) => leaveFor(provider, returnTo),
+    signInWithGoogle,
     signOut({ hosted } = {}) {
-      const method = store.read().record?.method;
+      const record = store.read().record;
       signOuts++;
       settleImport();
       store.supersede();
@@ -327,7 +392,8 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
       forgetLegacy();
       store.remove("signedOut");
       publish();
-      const leave = hosted ?? (method !== undefined && method !== "password");
+      // Only the hosted flow leaves a hosted session behind.
+      const leave = hosted ?? (record !== null && record.method !== "password" && !record.native);
       if (leave && config.loginDomain) redirect(logoutUrl(config, config.loginDomain, window.location.origin));
     },
     dispose() {

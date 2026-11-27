@@ -6,11 +6,12 @@
 | Artifact | For | Holds |
 |---|---|---|
 | `com.operationleyline.cardea:cardea-kotlin-core` | any JVM, no Android dependency | configuration, sign-in, sessions, linking, desktop sign-in |
-| `com.operationleyline.cardea:cardea-kotlin-android` | Android apps | Custom Tabs and the redirect, Keystore storage, Google proofs |
+| `com.operationleyline.cardea:cardea-kotlin-android` | Android apps | Custom Tabs and the redirect, Keystore storage, Google sign-in and proofs |
 
-Every sign-in, whether password, Google or Apple, happens on the pool's hosted
-sign-in pages in the person's own browser: the authorization code grant with
-PKCE (S256), as [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) describes.
+Sign-in happens on the pool's hosted sign-in pages in the person's own browser:
+the authorization code grant with PKCE (S256), as
+[RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) describes. The one other way
+in is [Google's account sheet on Android](#signing-in-with-google-natively).
 There is no password form in the app and no SRP. Sign-up, confirmation, forgot
 password and TOTP are on those pages too; "set a password" is their "forgot
 password" link.
@@ -259,6 +260,43 @@ CardeaBrowserContract.redirectFrom(intent)?.let { lifecycleScope.launch { client
 AES-GCM key that stays in the Android Keystore. The files are in the no-backup
 directory. A file whose key is gone reads as signed out.
 
+## Signing in with Google natively
+
+On Android, Google sign-in can use Credential Manager's account sheet instead of
+the browser (DESIGN.md, "Signing in with a provider natively"). The pool needs
+native provider sign-in turned on for this app client
+([`nativeProviderSignIn`](../packages/cdk/README.md#native-provider-sign-in)),
+and the app a `ProviderSignInAdapter` over two public operations of your API,
+`CreateSignInNonce` and `BeginProviderSignIn`:
+
+```kotlin
+// In a button's click handler. `browser` is registered with CardeaBrowserContract.
+when (val result = client.signInWithGoogle(activity, adapter)) {
+    is GoogleSignInResult.SignedIn -> enter(result.session)
+    is GoogleSignInResult.Browser -> browser.launch(result.request.url)
+}
+```
+
+- **Browser fallback.** Only when the device has no sheet to offer: no
+  credential provider, no support or no account. Finish it as any browser
+  sign-in.
+- A closed sheet is `SignInCancelled`. Your API's failures reach the caller and
+  open no browser.
+- When `BeginProviderSignIn` answers `identityLinkRequired`, throw
+  `LinkRequiredException` from the adapter. The person signs in their existing
+  way and links Google from their account.
+- The session is saved as any other. It refreshes at the user pool's API, and
+  `signOut()` returns `null` for it: there is no hosted session to end.
+- A pool that asks this flow for a second factor ends it with
+  `ChallengeUnsupported`.
+- The Google project needs the web client and an Android client for your package
+  and signing certificate, and your API's verifier must
+  [list the Android client](#server-setting-for-android-linking).
+
+On desktop, `DesktopSignIn.signInWithGoogle()` is the browser sign-in.
+`CardeaClient.signInWithProof` runs the same flow with a `ProofSource` of your
+own.
+
 ## Linking and sign-in methods
 
 Your API exposes Cardea's four operations; implement `IdentityLinkAdapter` over
@@ -325,9 +363,10 @@ A `ProofSource` returns an ID token that the provider issued to the challenge's
 
 ### Server setting for Android linking
 
-The API that runs `CompleteIdentityLink` must name every Android OAuth client id
-it accepts; the list is empty by default. Debug and release builds signed with
-different certificates have different ids.
+The API that runs `CompleteIdentityLink`, and `BeginProviderSignIn` for
+[native sign-in](#signing-in-with-google-natively), must name every Android
+OAuth client id it accepts; the list is empty by default. Debug and release
+builds signed with different certificates have different ids.
 
 ```rust
 let verifier = JwtVerifier::new()?

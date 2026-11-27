@@ -21,6 +21,9 @@ internal val EXPIRY_MARGIN: Duration = Duration.ofSeconds(60)
  *
  * [clockDrift] is how many seconds this device's clock was ahead of the pool's
  * when the tokens arrived, so a wrong device clock does not expire them.
+ *
+ * [native] marks a native provider sign-in: its tokens came from the user pool's
+ * API, so they are refreshed there and no hosted session goes with them.
  */
 internal class StoredSession private constructor(
     private val issuer: String,
@@ -29,6 +32,7 @@ internal class StoredSession private constructor(
     val accessToken: String,
     val refreshToken: String,
     private val clockDrift: Long,
+    val native: Boolean,
     private val idClaims: Map<String, Any?>,
     private val expiries: List<Instant>,
 ) {
@@ -49,25 +53,34 @@ internal class StoredSession private constructor(
     )
 
     fun serialize(): String = writeJsonObject(
-        mapOf(
-            "version" to VERSION,
-            "issuer" to issuer,
-            "clientId" to clientId,
-            "idToken" to idToken,
-            "accessToken" to accessToken,
-            "refreshToken" to refreshToken,
-            "clockDrift" to clockDrift,
-        ),
+        buildMap<String, Any?> {
+            put("version", VERSION)
+            put("issuer", issuer)
+            put("clientId", clientId)
+            put("idToken", idToken)
+            put("accessToken", accessToken)
+            put("refreshToken", refreshToken)
+            put("clockDrift", clockDrift)
+            if (native) put("native", true)
+        },
     )
 
     override fun toString(): String = "StoredSession(redacted)"
 
     companion object {
         /** Tokens that have just arrived. Notes the clock difference. */
-        fun issued(config: CardeaConfig, tokens: Tokens, refreshToken: String, clock: Clock): StoredSession {
+        fun issued(
+            config: CardeaConfig,
+            tokens: Tokens,
+            refreshToken: String,
+            clock: Clock,
+            native: Boolean = false,
+        ): StoredSession {
             val issuedAt = SignedJWT.parse(tokens.accessToken).jwtClaimsSet.issueTime?.toInstant()
             val drift = issuedAt?.let { clock.instant().epochSecond - it.epochSecond } ?: 0
-            return of(config.issuer, config.clientId, tokens.idToken, tokens.accessToken, refreshToken, drift)
+            return of(
+                config.issuer, config.clientId, tokens.idToken, tokens.accessToken, refreshToken, drift, native,
+            )
         }
 
         /**
@@ -86,6 +99,7 @@ internal class StoredSession private constructor(
                     checkNotNull(fields.text("accessToken")),
                     checkNotNull(fields.text("refreshToken")),
                     (fields["clockDrift"] as? Number)?.toLong() ?: 0,
+                    fields["native"] == true,
                 )
             }.getOrNull()
         }
@@ -97,12 +111,14 @@ internal class StoredSession private constructor(
             accessToken: String,
             refreshToken: String,
             clockDrift: Long,
+            native: Boolean,
         ): StoredSession {
             val id = SignedJWT.parse(idToken).jwtClaimsSet
             val access = SignedJWT.parse(accessToken).jwtClaimsSet
             val expiries = listOf(id, access).map { checkNotNull(it.expirationTime).toInstant() }
             return StoredSession(
-                issuer, clientId, idToken, accessToken, refreshToken, clockDrift, id.toJSONObject(), expiries,
+                issuer, clientId, idToken, accessToken, refreshToken, clockDrift, native, id.toJSONObject(),
+                expiries,
             )
         }
     }

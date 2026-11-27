@@ -20,6 +20,9 @@ pub enum TriggerError {
     /// A trigger this handler does not serve.
     #[error("unsupported Cognito trigger")]
     Unsupported,
+    /// A custom authentication step this library does not offer.
+    #[error("this sign-in step is not offered")]
+    UnexpectedChallenge,
     /// A product hook failed.
     #[error(transparent)]
     Product(#[from] ProductError),

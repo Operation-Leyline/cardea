@@ -17,7 +17,7 @@ internal class GrantRefused : Exception()
 internal class TokenEndpoint(private val url: String, private val clientId: String) {
     suspend fun request(grant: Map<String, String>): Tokens {
         val answer = failingWith(CardeaErrorCode.TokenExchangeFailed) {
-            request(url, mapOf("client_id" to clientId) + grant)
+            request(url, HttpBody.form(mapOf("client_id" to clientId) + grant))
         }
         val body = parseJsonObject(answer.body)
         if (answer.status !in 200..299) {

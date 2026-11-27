@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::testing::{Fixture, cognito::SUB, fixture, product::FakeProduct};
 
+mod custom_auth;
 mod inbound_attributes;
 mod verification;
 

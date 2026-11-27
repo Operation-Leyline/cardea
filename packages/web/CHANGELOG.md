@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Native Google sign-in
+
+`client.signInWithGoogle({ mode: "popup" | "oneTap" })` and `useGoogleSignIn()`
+sign in through Google Identity Services and Cognito's custom authentication
+flow, with the redirect as the fallback. New: the `providerSignIn` client option
+(`ProviderSignInAdapter`), the `link-required` and `sign-in-cancelled` error
+codes, and `native: true` on a session record made this way.
+
 ### Breaking: `providerSession` replaces the single-app Google importer
 
 The legacy-session importer that had one app's storage key built in is gone,

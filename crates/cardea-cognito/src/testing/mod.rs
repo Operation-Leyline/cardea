@@ -6,6 +6,7 @@ pub(crate) mod accounts;
 pub(crate) mod cognito;
 pub(crate) mod ddb;
 pub(crate) mod loopback;
+pub(crate) mod native;
 pub(crate) mod pending_change;
 pub(crate) mod product;
 pub(crate) mod provider;

@@ -58,6 +58,9 @@ public class DesktopSignIn(
         }
     }
 
+    /** Signs in with Google. A desktop has no native account sheet, so this is [signIn] in the browser. */
+    public suspend fun signInWithGoogle(): Session = signIn(Provider.Google)
+
     /**
      * Ends the local session, then the hosted one in the browser. When the
      * configured `logoutUri` is a loopback address with a port, this also shows

@@ -1,5 +1,6 @@
 export { CardeaProvider, useCardea } from "./context.js";
 export type { CardeaProviderProps } from "./context.js";
+export { useGoogleSignIn } from "./use-google-sign-in.js";
 export { useLinkProvider } from "./use-link-provider.js";
 export type { LinkStatus } from "./use-link-provider.js";
 export { useSession } from "./use-session.js";

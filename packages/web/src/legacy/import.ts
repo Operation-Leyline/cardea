@@ -1,7 +1,7 @@
 import type { ResolvedConfig } from "../config.js";
 import { CardeaError } from "../errors.js";
 import { tokensRejected, type Verifier } from "../hosted/verify.js";
-import { isFresh, justIssued, usernameOf, type SessionMethod, type StoredSession } from "../session/record.js";
+import { isFresh, justIssued, usernameOf, type StoredSession } from "../session/record.js";
 import { RefreshExpired, type TokenSource } from "../session/refresh.js";
 import type { LegacySession, LegacySessionSource } from "./source.js";
 
@@ -28,7 +28,7 @@ export interface ImportDependencies {
   config: ResolvedConfig;
   storage: () => Storage;
   verify: Verifier;
-  tokenSource: (method: SessionMethod) => TokenSource;
+  tokenSource: (record: StoredSession) => TokenSource;
   /** Saves the session, unless something newer has happened in the meantime. */
   save: (record: StoredSession) => void;
 }
@@ -73,7 +73,7 @@ export async function importLegacySession(dependencies: ImportDependencies): Pro
     }
     if (!isFresh(record)) {
       try {
-        record = justIssued({ ...record, ...(await tokenSource(record.method)(record)) });
+        record = justIssued({ ...record, ...(await tokenSource(record)(record)) });
         await verify(record, { ...checks, subject });
       } catch (error) {
         if (!(error instanceof RefreshExpired)) return postpone();

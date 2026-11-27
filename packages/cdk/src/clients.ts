@@ -12,6 +12,8 @@ export interface AppUrls {
 export interface ClientSettings {
   readonly providers: ConfiguredProvider[];
   readonly adminPasswordSignIn?: boolean;
+  /** Allow Cognito's custom authentication flow, which native sign-in uses. */
+  readonly customAuth?: boolean;
 }
 
 const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/;
@@ -40,21 +42,22 @@ export function addBrowserClient(
   userPool: cognito.UserPool,
   id: string,
   urls: AppUrls,
-  { providers, adminPasswordSignIn }: ClientSettings,
+  { providers, adminPasswordSignIn, customAuth }: ClientSettings,
 ): cognito.UserPoolClient {
-  const authFlows = { userSrp: true, adminUserPassword: adminPasswordSignIn };
+  const authFlows = { userSrp: true, adminUserPassword: adminPasswordSignIn, custom: customAuth };
   return addPublicClient(userPool, id, urls, providers, authFlows);
 }
 
 /**
- * The client for Android and desktop apps. They sign in only through the
- * hosted pages in the system browser, with the authorization code grant and
- * PKCE, so it has no secret and no password flow of its own.
+ * The client for Android and desktop apps. They sign in through the hosted
+ * pages in the system browser, with the authorization code grant and PKCE, so it
+ * has no secret and no password flow of its own. With `customAuth` it also takes
+ * a native provider sign-in.
  */
 export function addNativeClient(
   userPool: cognito.UserPool,
   urls: AppUrls,
-  { providers }: ClientSettings,
+  { providers, customAuth }: ClientSettings,
 ): cognito.UserPoolClient {
   const unusable = [...urls.callbackUrls, ...urls.logoutUrls].filter(
     (url) => Token.isUnresolved(url) || !NATIVE.test(url),
@@ -63,7 +66,7 @@ export function addNativeClient(
     throw new Error("nativeClient URLs must be https, http://127.0.0.1 or the app's own scheme");
   }
   // Stated as false: with no flow named at all, Cognito allows its default ones.
-  return addPublicClient(userPool, 'NativeClient', urls, providers, { userSrp: false });
+  return addPublicClient(userPool, 'NativeClient', urls, providers, { userSrp: false, custom: customAuth });
 }
 
 /** What every public client of the pool shares. */

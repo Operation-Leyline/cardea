@@ -6,7 +6,8 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
-import { mailBudgetKey, readMailBudgetKey, secretId } from './mail-budget-key';
+import { readSecret, secretId } from './key-secret';
+import { mailBudgetKey } from './mail-budget-key';
 import { assertSameAccount } from './same-account';
 
 /** The product-built function that runs the library's trigger handler. */
@@ -30,6 +31,9 @@ export interface CustomEmailSenderProps {
    */
   readonly budgetKeySecret?: secretsmanager.ISecret;
 }
+
+/** How an error about the sender's settings names it, and what to give a second pool. */
+const SENDER = { served: 'customEmailSender.handler', own: 'a sender function' };
 
 /** The email sender with its defaults filled in. */
 export interface EmailSender {
@@ -71,6 +75,7 @@ export function emailSender(
 export function lambdaTriggers(
   handler: lambda.IFunction,
   sender: EmailSender | undefined,
+  customChallenge = false,
 ): Pick<cognito.UserPoolProps, 'lambdaTriggers' | 'customSenderKmsKey'> {
   return {
     lambdaTriggers: {
@@ -79,6 +84,14 @@ export function lambdaTriggers(
       preTokenGeneration: handler,
       // CDK treats a present key as a trigger, even when it is undefined.
       ...(sender ? { customEmailSender: sender.handler } : { customMessage: handler }),
+      // The custom authentication flow of native sign-in.
+      ...(customChallenge
+        ? {
+            defineAuthChallenge: handler,
+            createAuthChallenge: handler,
+            verifyAuthChallengeResponse: handler,
+          }
+        : {}),
     },
     customSenderKmsKey: sender?.key,
   };
@@ -146,7 +159,10 @@ export function grantTriggers(
       roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
       statements: [decrypt],
     });
-    setSenderEnvironment(scope, sender.handler, 'COGNITO_EMAIL_KEY_ARN', sender.key.keyArn, 'email key');
+    setEnvironment(scope, sender.handler, 'COGNITO_EMAIL_KEY_ARN', sender.key.keyArn, {
+      ...SENDER,
+      what: 'email key',
+    });
   }
   grantMailBudgetKey(scope, sender);
 }
@@ -162,10 +178,15 @@ export function grantTriggers(
 function grantMailBudgetKey(scope: Construct, { handler, budgetKeySecret }: EmailSender): void {
   const policy = new iam.Policy(scope, 'MailBudgetKeyPolicy', {
     roles: [roleOf(scope, handler, 'triggers.customEmailSender.handler')],
-    statements: readMailBudgetKey(scope, budgetKeySecret),
+    statements: readSecret(scope, budgetKeySecret),
   });
   const id = secretId(budgetKeySecret);
-  setSenderEnvironment(scope, handler, 'MAIL_BUDGET_KEY_SECRET', id, 'mail budget key');
+  setEnvironment(scope, handler, 'MAIL_BUDGET_KEY_SECRET', id, { ...SENDER, what: 'mail budget key' });
+  orderAfterPolicy(scope, handler, policy);
+}
+
+/** Release a function of this stack only once `policy` grants it what it needs to start. */
+export function orderAfterPolicy(scope: Construct, handler: lambda.IFunction, policy: iam.Policy): void {
   if (isLocalFunction(scope, handler)) {
     // The function's resource alone: its role, a child too, comes before the policy.
     handler.node.defaultChild!.node.addDependency(policy);
@@ -177,35 +198,34 @@ function isLocalFunction(scope: Construct, handler: lambda.IFunction): handler i
   return handler instanceof lambda.Function && Stack.of(handler) === Stack.of(scope);
 }
 
-/** What each sender function has been told, so a second pool cannot quietly replace it. */
-const senderEnvironments = new WeakMap<lambda.Function, Map<string, string>>();
+/** What each function has been told, so a second pool cannot quietly replace it. */
+const environments = new WeakMap<lambda.Function, Map<string, string>>();
 
 /**
- * Tell a sender function defined in this stack one of the keys it needs. A
- * function in another stack cannot be handed it from here without a stack
- * cycle, and an imported one cannot be handed anything, so the product
- * configures those itself.
+ * Tell a function defined in this stack one of the keys it needs. A function in
+ * another stack cannot be handed it from here without a stack cycle, and an
+ * imported one cannot be handed anything, so the product configures those
+ * itself.
  */
-function setSenderEnvironment(
+export function setEnvironment(
   scope: Construct,
   handler: lambda.IFunction,
   name: string,
   value: string,
-  what: string,
+  { served, what, own }: { served: string; what: string; own: string },
 ): void {
   if (!isLocalFunction(scope, handler)) return;
-  const told = senderEnvironments.get(handler) ?? new Map<string, string>();
+  const told = environments.get(handler) ?? new Map<string, string>();
   if ((told.get(name) ?? value) !== value) {
     throw new Error(
-      `customEmailSender.handler already serves a pool with another ${what}; ` +
-        'give each such pool a sender function of its own',
+      `${served} already serves a pool with another ${what}; give each such pool ${own} of its own`,
     );
   }
-  senderEnvironments.set(handler, told.set(name, value));
+  environments.set(handler, told.set(name, value));
   handler.addEnvironment(name, value);
 }
 
-function roleOf(scope: Construct, fn: lambda.IFunction, name: string): iam.IRole {
+export function roleOf(scope: Construct, fn: lambda.IFunction, name: string): iam.IRole {
   if (!fn.role) {
     throw new Error(`${name} has no role to grant; import it with its role, or define it in this app`);
   }
