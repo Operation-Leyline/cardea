@@ -282,6 +282,26 @@ describe("signing in with Google in a popup", () => {
     expect(page.adapter.beginProviderSignIn).not.toHaveBeenCalled();
   });
 
+  it("goes on when an old session expires meanwhile", async () => {
+    // Saved before the page loads, as a returning visitor's is.
+    localStorage.setItem(SESSION_KEY, await storedSession({ expiresIn: -60 }));
+    const page = setup();
+    const exchange = page.cognito.operations.InitiateAuth!;
+    page.cognito.operations.InitiateAuth = (body) =>
+      body.AuthFlow === "CUSTOM_AUTH" ? exchange(body) : new CognitoFailure("NotAuthorizedException");
+    const { result } = await popup(page);
+    // The SDK retries a refused refresh with back-off before giving up.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let ended = false;
+    const refresh = page.client.getSession().finally(() => (ended = true));
+    while (!ended) await vi.advanceTimersByTimeAsync(1000);
+    vi.useRealTimers();
+    await expect(refresh).resolves.toBeNull();
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull();
+    await page.google.press();
+    await expect(result).resolves.toMatchObject({ status: "signedIn" });
+  });
+
   it("needs somewhere to draw the button", async () => {
     const page = setup();
     await expect(page.client.signInWithGoogle({ mode: "popup" })).rejects.toMatchObject({ code: "not-configured" });
@@ -314,6 +334,22 @@ describe("falling back to the redirect", () => {
   it("when the app has no native adapter", async () => {
     const page = setup({ providerSignIn: undefined } as unknown as ClientOptions);
     await expectRedirect(page);
+  });
+
+  it("not for a caller who gives up while it is being prepared", async () => {
+    const page = setup();
+    page.google.block();
+    const controller = new AbortController();
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    vi.spyOn(crypto.subtle, "digest").mockImplementation((...input) => {
+      controller.abort();
+      return digest(...input);
+    });
+    await expect(
+      page.client.signInWithGoogle({ mode: "popup", container: page.container, signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "sign-in-cancelled" });
+    expect(page.redirect).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(0);
   });
 
   it("only when asked to", async () => {

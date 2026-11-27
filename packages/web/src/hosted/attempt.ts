@@ -22,7 +22,10 @@ export interface Attempt {
   generation: string | null;
 }
 
-/** Saves a fresh attempt in tab storage and returns the authorization URL. */
+/**
+ * Saves a fresh attempt in tab storage and returns the authorization URL.
+ * Nothing is saved once `signal` has given up.
+ */
 export async function startAttempt(
   config: ResolvedConfig,
   provider: Provider,
@@ -30,6 +33,7 @@ export async function startAttempt(
   returnTo: string,
   storage: () => Storage,
   generation: string | null,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!config.loginDomain || !config.providers.includes(provider)) throw new CardeaError("provider-unavailable");
   const attempt: Attempt = {
@@ -46,6 +50,7 @@ export async function startAttempt(
     generation,
   };
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(attempt.verifier));
+  if (signal?.aborted) throw signal.reason;
   // A callback without its proof cannot succeed, so a refused write stops here.
   try {
     storage().setItem(config.attemptKey, JSON.stringify(attempt));
