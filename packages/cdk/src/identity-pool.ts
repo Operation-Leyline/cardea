@@ -5,7 +5,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
-import { addBrowserClient, addDevClient, AppUrls } from './clients';
+import { addBrowserClient, addDevClient, addNativeClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
 import { addBrandedDomain, BrandedDomainProps } from './domains';
 import { ErasureGrantOptions, grantErasure } from './erasure';
@@ -24,6 +24,11 @@ export interface IdentityPoolProps extends UserPoolSettings {
   readonly webClient: AppUrls;
   /** A second client for localhost callbacks. Default: none. */
   readonly devClient?: AppUrls;
+  /**
+   * A client for Android and desktop apps: hosted sign-in only, returning to an
+   * app link, the app's own scheme or `http://127.0.0.1`. Default: none.
+   */
+  readonly nativeClient?: AppUrls;
   /**
    * Also let a service holding AWS credentials check a password on these
    * clients (`AdminInitiateAuth`), as second-factor recovery and integration
@@ -58,7 +63,7 @@ export interface IdentityPoolProps extends UserPoolSettings {
 }
 
 /**
- * A product's sign-in: the user pool, its providers, browser clients and login
+ * A product's sign-in: the user pool, its providers, app clients and login
  * domains, the identity directory table, and the wiring of the product's
  * trigger function.
  */
@@ -66,6 +71,7 @@ export class IdentityPool extends Construct {
   public readonly userPool: cognito.UserPool;
   public readonly webClient: cognito.UserPoolClient;
   public readonly devClient?: cognito.UserPoolClient;
+  public readonly nativeClient?: cognito.UserPoolClient;
   public readonly prefixDomain: cognito.UserPoolDomain;
   public readonly brandedDomain?: cognito.UserPoolDomain;
   /** The `https://` address of the login host apps should use: branded once active, otherwise the prefix. */
@@ -114,10 +120,14 @@ export class IdentityPool extends Construct {
     const clients = { providers, adminPasswordSignIn: props.adminPasswordSignIn };
     this.webClient = addBrowserClient(this.userPool, 'WebClient', props.webClient, clients);
     this.devClient = props.devClient && addDevClient(this.userPool, props.devClient, clients);
+    this.nativeClient = props.nativeClient && addNativeClient(this.userPool, props.nativeClient, clients);
     if (props.managedLogin) {
       addDefaultBranding(this, 'WebClientBranding', this.userPool, this.webClient, this.prefixDomain);
       if (this.devClient) {
         addDefaultBranding(this, 'DevWebClientBranding', this.userPool, this.devClient, this.prefixDomain);
+      }
+      if (this.nativeClient) {
+        addDefaultBranding(this, 'NativeClientBranding', this.userPool, this.nativeClient, this.prefixDomain);
       }
     }
 
@@ -125,6 +135,7 @@ export class IdentityPool extends Construct {
       pool: this.userPool,
       webClient: this.webClient,
       devClient: this.devClient,
+      nativeClient: this.nativeClient,
       prefixDomain: this.prefixDomain,
       brandedDomain: this.brandedDomain,
       google: google?.resource,
@@ -139,6 +150,7 @@ export class IdentityPool extends Construct {
         'user-pool-id': this.userPool.userPoolId,
         'web-client-id': this.webClient.userPoolClientId,
         'dev-web-client-id': this.devClient?.userPoolClientId,
+        'native-client-id': this.nativeClient?.userPoolClientId,
         'login-domain': this.loginUrl,
         'identities-table': this.directory.tableName,
       });

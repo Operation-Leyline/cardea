@@ -6,6 +6,7 @@ export interface PublishedIds {
   readonly 'user-pool-id': string;
   readonly 'web-client-id': string;
   readonly 'dev-web-client-id'?: string;
+  readonly 'native-client-id'?: string;
   /** The `https://` address of the login host apps should use now. */
   readonly 'login-domain': string;
   readonly 'identities-table': string;

@@ -87,6 +87,88 @@ async fn a_proof_is_bound_to_its_issuer_client_nonce_mailbox_and_time() {
     }
 }
 
+const APP_CLIENT: &str = "android-app-client";
+
+/// Whether `verifier` takes a Google proof with `changes` made to it.
+async fn takes(verifier: &JwtVerifier, changes: &[(&str, Value)]) -> bool {
+    let mut claims = good(Provider::Google);
+    for (field, value) in changes {
+        claims[*field] = value.clone();
+    }
+    let token = sign(signing_key(), &claims);
+    let answer = verifier
+        .verify(ProofRequest {
+            provider: Provider::Google,
+            token: &token,
+            client_id: client_id(Provider::Google),
+            nonce: NONCE,
+            now: now(),
+        })
+        .await;
+    match answer {
+        Ok(_) => true,
+        Err(error) => {
+            assert_eq!(error, Error::Invalid);
+            false
+        }
+    }
+}
+
+/// A token an Android app asks for: the web client's, naming the app in `azp`.
+#[tokio::test]
+async fn a_listed_authorized_party_is_accepted() {
+    let verifier = verifier().with_authorized_parties(Provider::Google, ["other", APP_CLIENT]);
+    assert!(takes(&verifier, &[("azp", json!(APP_CLIENT))]).await);
+    assert!(takes(&verifier, &[("azp", json!(client_id(Provider::Google)))]).await);
+    assert!(takes(&verifier, &[]).await);
+}
+
+#[tokio::test]
+async fn an_unlisted_authorized_party_is_refused() {
+    let verifier = verifier().with_authorized_parties(Provider::Google, [APP_CLIENT, ""]);
+    for party in [
+        json!("another-app"),
+        json!(""),
+        Value::Null,
+        json!([APP_CLIENT]),
+    ] {
+        assert!(
+            !takes(&verifier, &[("azp", party.clone())]).await,
+            "{party}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_listed_authorized_party_does_not_stand_in_for_the_audience() {
+    let verifier = verifier().with_authorized_parties(Provider::Google, [APP_CLIENT]);
+    for audience in [
+        json!(APP_CLIENT),
+        json!("other-client"),
+        json!([client_id(Provider::Google), APP_CLIENT]),
+    ] {
+        let changes = [("aud", audience.clone()), ("azp", json!(APP_CLIENT))];
+        assert!(!takes(&verifier, &changes).await, "{audience}");
+    }
+}
+
+#[tokio::test]
+async fn by_default_only_the_client_may_be_the_authorized_party() {
+    for verifier in [
+        verifier(),
+        // Another provider's list says nothing about Google.
+        verifier().with_authorized_parties(Provider::Apple, [APP_CLIENT]),
+        // A second call replaces the list.
+        verifier()
+            .with_authorized_parties(Provider::Google, [APP_CLIENT])
+            .with_authorized_parties(Provider::Google, Vec::<String>::new()),
+    ] {
+        assert!(!takes(&verifier, &[("azp", json!(APP_CLIENT))]).await);
+        assert!(takes(&verifier, &[("azp", json!(client_id(Provider::Google)))]).await);
+        assert!(takes(&verifier, &[]).await);
+    }
+}
+
 #[tokio::test]
 async fn one_providers_token_is_not_anothers_proof() {
     for (signed, asked) in [

@@ -23,6 +23,8 @@ const ISSUED_AHEAD_SECONDS: i64 = 30;
 /// share it between requests.
 pub struct JwtVerifier {
     keys: [(Provider, Keys); Provider::ALL.len()],
+    /// Who besides the client a proof may name in `azp`, per provider.
+    authorized_parties: Vec<(Provider, String)>,
 }
 
 impl JwtVerifier {
@@ -38,7 +40,29 @@ impl JwtVerifier {
                 let keys = Keys::new(provider.rule().keys_url, Arc::clone(&fetcher));
                 (provider, keys)
             }),
+            authorized_parties: Vec::new(),
         }
+    }
+
+    /// Also accept `provider`'s proofs whose `azp` (authorized party) is one of
+    /// `parties`. Google names an Android app's own OAuth client there when the
+    /// app asks for a token for the web client. The audience must still be the
+    /// client id. There are none by default; a second call replaces the
+    /// provider's list, and empty ids are ignored.
+    pub fn with_authorized_parties<S: Into<String>>(
+        mut self,
+        provider: Provider,
+        parties: impl IntoIterator<Item = S>,
+    ) -> Self {
+        self.authorized_parties.retain(|(of, _)| *of != provider);
+        self.authorized_parties.extend(
+            parties
+                .into_iter()
+                .map(Into::into)
+                .filter(|party| !party.is_empty())
+                .map(|party| (provider, party)),
+        );
+        self
     }
 
     /// The key `provider` publishes under `kid`.
@@ -68,12 +92,17 @@ impl ProofVerifier for JwtVerifier {
         }
         let kid = header.kid.ok_or(Error::Invalid)?;
         let key = self.key(request.provider, &kid).await?;
-        verify_with_key(&request, &key)
+        verify_with_key(&request, &key, &self.authorized_parties)
     }
 }
 
-/// Signature, issuer, audience, expiry, freshness, nonce and a verified email.
-fn verify_with_key(request: &ProofRequest<'_>, key: &DecodingKey) -> Result<VerifiedProof, Error> {
+/// Signature, issuer, audience, authorized party, expiry, freshness, nonce and
+/// a verified email.
+fn verify_with_key(
+    request: &ProofRequest<'_>,
+    key: &DecodingKey,
+    authorized_parties: &[(Provider, String)],
+) -> Result<VerifiedProof, Error> {
     let ProofRequest {
         provider,
         token,
@@ -94,10 +123,17 @@ fn verify_with_key(request: &ProofRequest<'_>, key: &DecodingKey) -> Result<Veri
         .map_err(|_| Error::Invalid)?
         .claims;
     let issued = claims["iat"].as_i64().ok_or(Error::Invalid)?;
-    // One audience, this client: a token also made for someone else is refused.
+    let authorized = |party: &Value| {
+        party == client_id
+            || authorized_parties
+                .iter()
+                .any(|(of, id)| *of == provider && party == id.as_str())
+    };
+    // One audience, this client: a token also made for someone else is refused,
+    // and so is one asked for by a party the product has not named.
     if claims["nonce"] != nonce
         || claims["aud"] != client_id
-        || (claims.get("azp").is_some() && claims["azp"] != client_id)
+        || claims.get("azp").is_some_and(|party| !authorized(party))
         || issued > now.saturating_add(ISSUED_AHEAD_SECONDS)
         || now.saturating_sub(issued) > PROOF_MAX_AGE_SECONDS
     {

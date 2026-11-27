@@ -4,12 +4,13 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { describe, expect, it } from 'vitest';
 import { IdentityPool, LogicalIds } from '../src';
-import { build, devClient, env, fn, webClient, zone } from './support';
+import { build, devClient, env, fn, nativeClient, webClient, zone } from './support';
 
 const logicalIds: Required<LogicalIds> = {
   pool: 'LivePool',
   webClient: 'LiveWebClient',
   devClient: 'LiveDevClient',
+  nativeClient: 'LiveNativeClient',
   prefixDomain: 'LivePrefixDomain',
   brandedDomain: 'LiveBrandedDomain',
   google: 'LiveGoogle',
@@ -22,6 +23,7 @@ const types: Record<keyof LogicalIds, string> = {
   pool: 'AWS::Cognito::UserPool',
   webClient: 'AWS::Cognito::UserPoolClient',
   devClient: 'AWS::Cognito::UserPoolClient',
+  nativeClient: 'AWS::Cognito::UserPoolClient',
   prefixDomain: 'AWS::Cognito::UserPoolDomain',
   brandedDomain: 'AWS::Cognito::UserPoolDomain',
   google: 'AWS::Cognito::UserPoolIdentityProvider',
@@ -48,6 +50,7 @@ const full = () =>
   build((stack, handler) => ({
     triggers: { handler, customEmailSender: {} },
     devClient,
+    nativeClient,
     brandedDomain: { domainName: 'auth.example.com', hostedZone: zone(stack), active: true },
     google: { secretName: 'example/auth/google' },
     apple: { secretName: 'example/auth/apple' },
@@ -65,6 +68,7 @@ describe('logical ids', () => {
   it('puts each id on the right one of two alike resources', () => {
     expect(resources.LiveWebClient.Properties.CallbackURLs).toEqual(['https://app.example.com/auth/callback']);
     expect(resources.LiveDevClient.Properties.CallbackURLs).toEqual(devClient.callbackUrls);
+    expect(resources.LiveNativeClient.Properties.CallbackURLs).toEqual(nativeClient.callbackUrls);
     expect(resources.LivePrefixDomain.Properties.CustomDomainConfig).toBeUndefined();
     expect(resources.LiveBrandedDomain.Properties.Domain).toBe('auth.example.com');
     expect(resources.LiveGoogle.Properties.ProviderName).toBe('Google');
