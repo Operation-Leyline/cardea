@@ -4,7 +4,9 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+import { mailBudgetKey, readMailBudgetKey, secretId } from './mail-budget-key';
 import { assertSameAccount } from './same-account';
 
 /** The product-built function that runs the library's trigger handler. */
@@ -15,21 +17,28 @@ export interface TriggerProps {
   readonly customEmailSender?: CustomEmailSenderProps;
 }
 
-/** The custom email sender trigger and the key Cognito encrypts codes under. */
+/** The custom email sender trigger, the key Cognito encrypts codes under and the mail budget's key. */
 export interface CustomEmailSenderProps {
   /** Default: the trigger handler. */
   readonly handler?: lambda.IFunction;
   /** Default: a new key with rotation, retained like the pool. */
   readonly key?: kms.IKey;
+  /**
+   * The secret the sender names its mail budget rows under: 64 hexadecimal
+   * characters (32 random bytes) as its text, in the sender function's region.
+   * Default: a new generated secret, retained like the table.
+   */
+  readonly budgetKeySecret?: secretsmanager.ISecret;
 }
 
 /** The email sender with its defaults filled in. */
 export interface EmailSender {
   readonly handler: lambda.IFunction;
   readonly key: kms.IKey;
+  readonly budgetKeySecret: secretsmanager.ISecret;
 }
 
-/** Fill in the custom email sender's function and key, creating the key if needed. */
+/** Fill in the custom email sender's function, key and budget key secret, creating those two if needed. */
 export function emailSender(
   scope: Construct,
   triggers: TriggerProps,
@@ -46,6 +55,7 @@ export function emailSender(
         enableKeyRotation: true,
         removalPolicy,
       }),
+    budgetKeySecret: props.budgetKeySecret ?? mailBudgetKey(scope, removalPolicy),
   };
 }
 
@@ -91,16 +101,18 @@ export function wireInboundFederation(userPool: cognito.UserPool, handler: lambd
 /**
  * What the functions may do: the handler finds, creates and links users in
  * this pool and reads and writes the directory; the email sender decrypts
- * codes. A sender that is a function of its own gets nothing else here: it
- * judges each message from the event alone, and its budget table is the
- * product's to grant.
+ * codes and reads the mail budget's key. A sender that is a function of its own
+ * gets nothing else here: it judges each message from the event alone, and its
+ * budget table is the product's to grant.
  *
  * The pool names the functions as triggers, so a function that depends on the
  * pool closes a loop CloudFormation refuses to deploy. A function depends on
  * its role and the role's default policy, which is where `addToRolePolicy` and
  * `grant*` put statements. These go in separate policy resources that nothing
- * depends on, so they can name this one pool. Keeping the table and key grants
- * there too avoids the same loop between stacks.
+ * depends on, so they can name this one pool. Keeping the table and email key
+ * grants there too avoids the same loop between stacks. The mail budget key's
+ * grant is the exception, in a policy the sender does depend on
+ * ({@link grantMailBudgetKey}).
  */
 export function grantTriggers(
   scope: Construct,
@@ -129,34 +141,68 @@ export function grantTriggers(
   const decrypt = new iam.PolicyStatement({ actions: ['kms:Decrypt'], resources: [sender.key.keyArn] });
   if (sender.handler === handler) {
     policy.addStatements(decrypt);
-    return;
+  } else {
+    new iam.Policy(scope, 'EmailSenderPolicy', {
+      roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
+      statements: [decrypt],
+    });
+    setSenderEnvironment(scope, sender.handler, 'COGNITO_EMAIL_KEY_ARN', sender.key.keyArn, 'email key');
   }
-  new iam.Policy(scope, 'EmailSenderPolicy', {
-    roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
-    statements: [decrypt],
-  });
-  setSenderEnvironment(scope, sender);
+  grantMailBudgetKey(scope, sender);
 }
 
-/** The key each sender function has been told of, so a second pool cannot quietly replace it. */
-const senderKeys = new WeakMap<lambda.Function, string>();
+/**
+ * Let the sender read the mail budget's key, and tell it which secret holds it.
+ *
+ * The statements name the secret and not the pool, so they go in a policy of
+ * their own that the function can depend on: CloudFormation then grants the
+ * read before it releases a function that needs it, which without the key sends
+ * nothing. That order can only be set for a function in this stack.
+ */
+function grantMailBudgetKey(scope: Construct, { handler, budgetKeySecret }: EmailSender): void {
+  const policy = new iam.Policy(scope, 'MailBudgetKeyPolicy', {
+    roles: [roleOf(scope, handler, 'triggers.customEmailSender.handler')],
+    statements: readMailBudgetKey(scope, budgetKeySecret),
+  });
+  const id = secretId(budgetKeySecret);
+  setSenderEnvironment(scope, handler, 'MAIL_BUDGET_KEY_SECRET', id, 'mail budget key');
+  if (isLocalFunction(scope, handler)) {
+    // The function's resource alone: its role, a child too, comes before the policy.
+    handler.node.defaultChild!.node.addDependency(policy);
+  }
+}
+
+/** Whether `handler` is a function this app defines in `scope`'s stack, which it can therefore configure. */
+function isLocalFunction(scope: Construct, handler: lambda.IFunction): handler is lambda.Function {
+  return handler instanceof lambda.Function && Stack.of(handler) === Stack.of(scope);
+}
+
+/** What each sender function has been told, so a second pool cannot quietly replace it. */
+const senderEnvironments = new WeakMap<lambda.Function, Map<string, string>>();
 
 /**
- * Tell a sender function defined in this stack which key opens its codes. A
+ * Tell a sender function defined in this stack one of the keys it needs. A
  * function in another stack cannot be handed it from here without a stack
  * cycle, and an imported one cannot be handed anything, so the product
  * configures those itself.
  */
-function setSenderEnvironment(scope: Construct, { handler, key }: EmailSender): void {
-  if (!(handler instanceof lambda.Function) || Stack.of(handler) !== Stack.of(scope)) return;
-  if ((senderKeys.get(handler) ?? key.keyArn) !== key.keyArn) {
+function setSenderEnvironment(
+  scope: Construct,
+  handler: lambda.IFunction,
+  name: string,
+  value: string,
+  what: string,
+): void {
+  if (!isLocalFunction(scope, handler)) return;
+  const told = senderEnvironments.get(handler) ?? new Map<string, string>();
+  if ((told.get(name) ?? value) !== value) {
     throw new Error(
-      'customEmailSender.handler already serves a pool with another email key; ' +
+      `customEmailSender.handler already serves a pool with another ${what}; ` +
         'give each such pool a sender function of its own',
     );
   }
-  senderKeys.set(handler, key.keyArn);
-  handler.addEnvironment('COGNITO_EMAIL_KEY_ARN', key.keyArn);
+  senderEnvironments.set(handler, told.set(name, value));
+  handler.addEnvironment(name, value);
 }
 
 function roleOf(scope: Construct, fn: lambda.IFunction, name: string): iam.IRole {

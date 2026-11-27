@@ -106,7 +106,7 @@ Leyline row moves. Partition key `identityKey`, TTL attribute `expiresAt`.
 | `PROVIDER#{Provider}#{subject}` | new providers, same attributes |
 | `LINK#{userId}#{linkId}` | link challenge: provider (a row without it is Google), nonce, deadline, proof digest, receipt; 24 h TTL |
 | `METHODS#{userId}` | new: the identities linked onto the user (provider, subject, the email as the provider gave it, whether an unlink is unfinished) and a `version` every write is conditional on; during an erasure, `erasingMailboxes` |
-| `MAIL#{sha256(personKey)}` / `SEND#{day}`, `RESET#{day}`, `DELIVERY#…` | the mail budget, counted per UTC day: `SEND#` allows 8 signup, resend, attribute-verification and authentication codes, `RESET#` allows 3 password reset codes, so reset requests cannot use up the others; `DELIVERY#` marks a message already counted (Leyline keeps these in its settings table; the library takes the table name as configuration) |
+| `MAILK#{hmac(personKey)}` / `SEND#{day}`, `RESET#{day}`, `DELIVERYK#{hmac(delivery)}` | the mail budget, counted per UTC day: `SEND#` allows 8 signup, resend, attribute-verification and authentication codes, `RESET#` allows 3 password reset codes, so reset requests cannot use up the others; `DELIVERYK#` marks a message already counted. `hmac` is under the product's [mail budget key](#the-mail-budget-key). These rows are not in the directory table: the library takes the name of the product's budget table as configuration |
 
 `METHODS#{userId}` exists because nothing else holds what listing and
 unlinking need: Cognito's `identities` attribute carries no email, a
@@ -130,6 +130,58 @@ user the library created behind a provider sign-in (random, unpublished
 password). It decides whether "password" counts as a sign-in method when
 something is unlinked. Rows without it are read as: origin `Cognito` means
 true, origin a provider means false.
+
+## The mail budget key
+
+Decided 2026-11-27. The mail budget names a mailbox and a message by
+HMAC-SHA-256, in lower-case hex, under a secret of the product's own. With an
+unkeyed hash, anyone who could read the table could test a guessed address
+against it; with HMAC they need the secret too. Someone who can read both still
+can.
+
+- **The secret.** One per product, in AWS Secrets Manager, in the sender
+  function's region. Its `SecretString` is 32 random bytes as 64 hexadecimal
+  characters; surrounding white space is ignored and anything else is refused.
+  Hex rather than base64 because Secrets Manager's generator can produce it, so
+  no template or person has to hold the value (`openssl rand -hex 32` makes one
+  by hand).
+- **Configuration.** `MAIL_BUDGET_KEY_SECRET` holds the secret's name or ARN.
+  Only the sender function needs it, and `secretsmanager:GetSecretValue` on it.
+- **Once per cold start.** A function instance reads the secret for its first
+  mail event, keeps the key for as long as it lives, and computes the HMACs
+  itself. A failed read is not kept: the next event reads again.
+- **Fail closed.** Without the variable, or with a secret that cannot be read or
+  is not a key, no message is sent, the event fails and the cause is logged, as
+  when the counter cannot be written. This covers the messages the budget does
+  not count (temporary passwords and security alerts) too. There is no unkeyed
+  fallback.
+
+**Rotation resets the day's counters** (there is no previous key). A new key
+names new rows, so on the day of a change:
+
+- a mailbox's counts start again, and it can be sent up to its cap under each
+  key in use that day: a running instance keeps the old key until Lambda
+  replaces it, while new instances count under the new one;
+- a retry of a message counted under the old key is counted again.
+
+Reading a previous key as well could carry counts across, but not exactly: a
+condition covers one row, so the cap could no longer be one conditional write
+over the old counter and the new one, and instances that hold only the old key
+would go on counting on the old rows until replaced. Keeping the count exact
+would take a rollout in two steps. A key changes rarely and deliberately, and a
+reset allows no more than another cap per key, so the library does not do this.
+Do not schedule automatic rotation. To rotate, store the new value, then change
+the sender function's configuration so that every instance is replaced.
+
+**Moving from unkeyed rows.** Rows from earlier deployments are named
+`MAIL#{sha256}` and `DELIVERY#{sha256}`. Keyed rows are named `MAILK#` and
+`DELIVERYK#`, so the two never collide, and the library neither reads nor writes
+the old ones. They lapse through their TTL (`expiresAt`, two days after the
+start of the row's day). The switch resets each mailbox's daily counters once,
+on the same terms as a rotation. The secret, the variable and the grant must be
+in place before a sender that needs them runs. The CDK construct orders this for
+a function in the pool's stack; `packages/cdk/README.md` says what to do for any
+other.
 
 ## The trigger handler
 
@@ -401,10 +453,13 @@ policy, email-only recovery, optional TOTP), the prefix domain and an
 optional branded domain, Google and Apple providers from Secrets Manager,
 the web client and an optional localhost dev client, the directory table
 (on-demand, TTL, point-in-time recovery, retained), the trigger wiring for a
-product-built function, and the custom email sender's KMS key. It grants a
-product's API service the sign-in method operations (`grantSignInMethods`) and
-its deletion worker erasure (`grantErasure`). Yoru (SST)
-wires the same settings itself; `packages/cdk/README.md` lists them.
+product-built function, and, for a custom email sender, its KMS key and the
+[mail budget key](#the-mail-budget-key) secret (generated and retained like the
+table, unless the product passes one), which only the sender function may read.
+It grants a product's API service the sign-in method operations
+(`grantSignInMethods`) and its deletion worker erasure (`grantErasure`). A
+product that does not use CDK wires the same settings itself;
+`packages/cdk/README.md` lists them.
 
 ## Adoption
 

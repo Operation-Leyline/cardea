@@ -4,6 +4,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import { addBrowserClient, addDevClient, addNativeClient, AppUrls } from './clients';
 import { DirectoryProps, directoryTable } from './directory';
@@ -81,6 +82,11 @@ export class IdentityPool extends Construct {
   public readonly directory: dynamodb.ITable;
   /** Set when there is a custom email sender; its function needs this key's ARN to decrypt. */
   public readonly emailKey?: kms.IKey;
+  /**
+   * Set when there is a custom email sender; the secret holding the key its mail
+   * budget rows are named under, which its function reads.
+   */
+  public readonly mailBudgetKey?: secretsmanager.ISecret;
   private readonly triggerFunctions: lambda.IFunction[];
 
   constructor(scope: Construct, id: string, props: IdentityPoolProps) {
@@ -88,6 +94,7 @@ export class IdentityPool extends Construct {
     const { handler } = props.triggers;
     const sender = emailSender(this, props.triggers, props.removalPolicy);
     this.emailKey = sender?.key;
+    this.mailBudgetKey = sender?.budgetKeySecret;
     this.triggerFunctions = sender ? [handler, sender.handler] : [handler];
 
     this.userPool = createUserPool(this, props, lambdaTriggers(handler, sender));

@@ -16,8 +16,8 @@ The AWS side of [Cardea](../../DESIGN.md) sign-in as one CDK construct,
   tokens 1 hour, refresh 30 days) and an optional localhost client;
 - the directory table (`identityKey`, TTL `expiresAt`, on-demand,
   point-in-time recovery, retained);
-- the wiring and IAM of your trigger function, and the custom email sender's
-  KMS key;
+- the wiring and IAM of your trigger function, and, for a custom email sender,
+  its KMS key and the [mail budget key](#the-mail-budget-key) secret;
 - optionally, SSM parameters with the ids.
 
 ## Usage
@@ -49,6 +49,8 @@ const identity = new IdentityPool(this, 'Identity', {
 });
 
 // Tell the handler what it reads. The variable names are your handler's.
+// A handler that sends mail also reads MAIL_BUDGET_TABLE (your table); the
+// construct has already set MAIL_BUDGET_KEY_SECRET on it.
 triggers.addEnvironment('IDENTITIES_TABLE', identity.directory.tableName);
 triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', identity.emailKey!.keyArn);
 ```
@@ -65,15 +67,28 @@ from the construct: CDK reports a cyclic reference. Give them values their own
 stack already knows:
 
 ```ts
-// In the functions' stack. A separate sender function needs the key's ARN only,
+// In the functions' stack. A separate sender function needs the two keys only,
 // besides its mail budget table.
 const emailKey = new kms.Key(this, 'EmailCodeKey', { enableKeyRotation: true });
+const budgetKeySecret = new secretsmanager.Secret(this, 'MailBudgetKey', {
+  // 64 hexadecimal characters: see "The mail budget key".
+  generateSecretString: {
+    passwordLength: 64,
+    excludeUppercase: true,
+    excludePunctuation: true,
+    excludeCharacters: 'ghijklmnopqrstuvwxyz',
+    includeSpace: false,
+    requireEachIncludedType: false,
+  },
+  removalPolicy: RemovalPolicy.RETAIN,
+});
 triggers.addEnvironment('IDENTITIES_TABLE', 'example-identities');
 triggers.addEnvironment('COGNITO_EMAIL_KEY_ARN', emailKey.keyArn);
+triggers.addEnvironment('MAIL_BUDGET_KEY_SECRET', budgetKeySecret.secretArn);
 
 // In the pool's stack.
 new IdentityPool(this, 'Identity', {
-  triggers: { handler: triggers, customEmailSender: { key: emailKey } },
+  triggers: { handler: triggers, customEmailSender: { key: emailKey, budgetKeySecret } },
   directory: { tableName: 'example-identities' }, // the same literal name
   // …
 });
@@ -84,7 +99,7 @@ new IdentityPool(this, 'Identity', {
 | Property | Default | Meaning |
 |---|---|---|
 | `triggers.handler` | required | Function for PreSignUp, InboundFederation, PostConfirmation, PreTokenGeneration and, without a custom email sender, CustomMessage |
-| `triggers.customEmailSender` | none | `{ handler?, key? }`; the handler defaults to the trigger function, the key to a new one. See [A separate email sender](#a-separate-email-sender) |
+| `triggers.customEmailSender` | none | `{ handler?, key?, budgetKeySecret? }`; the handler defaults to the trigger function, the key and the [mail budget key](#the-mail-budget-key) secret to new ones. See [A separate email sender](#a-separate-email-sender) |
 | `webClient` | required | `callbackUrls`, `logoutUrls` of the production app |
 | `devClient` | none | Second client; `http://localhost` or `http://127.0.0.1` URLs only |
 | `nativeClient` | none | Client for Android and desktop apps; see [Native apps](#native-apps) |
@@ -97,12 +112,12 @@ new IdentityPool(this, 'Identity', {
 | `logicalIds` | CDK's | Logical ids of resources the stack already has; see [Adopting an existing pool](#adopting-an-existing-pool) |
 | `ssmPrefix` | none | Publishes `user-pool-id`, `web-client-id`, `dev-web-client-id`, `native-client-id`, `login-domain`, `identities-table` |
 | `deletionProtection` | `true` | Pool deletion protection |
-| `removalPolicy` | `RETAIN` | Pool, new directory table and new email key |
+| `removalPolicy` | `RETAIN` | Pool, new directory table, new email key and new mail budget key secret |
 | `email`, `userVerification`, `customAttributes` | CDK's | Passed to the user pool |
 
 The construct exposes `userPool`, `webClient`, `devClient`, `nativeClient`,
-`prefixDomain`, `brandedDomain`, `loginUrl`, `redirectUris`, `directory` and
-`emailKey`.
+`prefixDomain`, `brandedDomain`, `loginUrl`, `redirectUris`, `directory`,
+`emailKey` and `mailBudgetKey`.
 
 ### Native apps
 
@@ -200,8 +215,9 @@ into a policy of your own in the pool's stack.
 The trigger function gets `cognito-idp:AdminGetUser`, `AdminCreateUser`,
 `AdminSetUserPassword` and `AdminLinkProviderForUser` on this pool, read and
 write on the directory table, and, when it is also the email sender,
-`kms:Decrypt` on the email key. A [separate sender
-function](#a-separate-email-sender) gets less. Everything else is yours: your
+`kms:Decrypt` on the email key and `secretsmanager:GetSecretValue` on the mail
+budget key secret. A [separate sender function](#a-separate-email-sender) gets
+less. Everything else is yours: your
 product's tables, the mail budget table, sending mail, and your services' own
 permissions beyond `grantSignInMethods` and `grantErasure`.
 
@@ -214,24 +230,62 @@ put it in its own `iam.Policy` attached to the function's role.
 ### A separate email sender
 
 When `customEmailSender.handler` is not `triggers.handler`, the construct grants
-that function `kms:Decrypt` on the email key, in a policy the function does not
-depend on, and nothing else. The Cardea sender reads neither the directory nor
-the pool.
+that function `kms:Decrypt` on the email key and
+`secretsmanager:GetSecretValue` on the mail budget key secret, and nothing else.
+The decrypt grant is in a policy the function does not depend on. The secret
+grant is in one it does depend on, when it is a `lambda.Function` in the pool's
+stack, so that the grant is in place before the function is updated. The trigger
+function gets neither. The Cardea sender reads neither the directory nor the
+pool.
 
 | Environment variable | Set by |
 |---|---|
-| `COGNITO_EMAIL_KEY_ARN` | the construct, for a `lambda.Function` in the pool's stack; otherwise you |
+| `COGNITO_EMAIL_KEY_ARN` | the construct, for a separate `lambda.Function` in the pool's stack; otherwise you |
+| `MAIL_BUDGET_KEY_SECRET` | the construct, for a `lambda.Function` in the pool's stack, the trigger function included; otherwise you |
 | `MAIL_BUDGET_TABLE` | you: the construct creates no budget table |
 
-A function the construct configures serves one key, so two pools in a stack
-cannot share it unless they share the key; synth refuses.
+A function the construct configures serves one email key and one mail budget
+key, so two pools in a stack cannot share it unless they are passed the same
+`key` and `budgetKeySecret`; synth refuses.
 
-An imported function (`IFunction`) must already have both, and a function
+An imported function (`IFunction`) must already have all three, and a function
 in another stack must get them from values its own stack knows, as
 [above](#trigger-functions-in-another-stack). Either way the budget table
 (partition key `partitionKey`, sort key `sortKey`, TTL `expiresAt`) and
 `PutItem` and `UpdateItem` on it are yours; the same is true when the trigger
 function sends the mail.
+
+### The mail budget key
+
+The mail budget names its rows by HMAC-SHA-256 under a secret of the product's
+own, so that reading the table is not enough to test a guessed address
+(DESIGN.md, "The mail budget key"). With a custom email sender the construct
+generates that secret, retained like the table, and exposes it as
+`mailBudgetKey`. Use one secret per product. To bring your own:
+
+```ts
+customEmailSender: {
+  budgetKeySecret: secretsmanager.Secret.fromSecretNameV2(this, 'MailBudgetKey', 'example/auth/mail-budget-key'),
+},
+```
+
+- Its text is 64 hexadecimal characters (32 random bytes); anything else is
+  refused.
+- It must be in the sender function's region. For a secret under a customer
+  managed KMS key, import it with `encryptionKey`
+  (`Secret.fromSecretAttributes`): the construct then also grants `kms:Decrypt`
+  on that key through Secrets Manager. The key's own policy must allow it.
+- A sender that cannot read it sends nothing.
+- Changing its value starts every mailbox's daily count again, so set no
+  rotation schedule. A running function keeps the value it read: after changing
+  it, change the function's configuration so that every instance is replaced.
+
+A sender released before the secret, its variable and its grant are in place
+refuses every message. For a function in the pool's stack one deploy is enough:
+the construct puts the grant in a policy the function depends on, so
+CloudFormation applies it before it updates the function. For any other
+function, including one in another stack (which deploys before the pool's), put
+the three in place with one deploy and release the new sender with a later one.
 
 ## Changing email
 
@@ -622,10 +676,38 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   `AdminLinkProviderForUser` on this pool's ARN, in a role policy that the
   function does not depend on (this replaces `ListUsers` on `*`).
 - Read and write on the directory table.
-- `kms:Decrypt` on the email key for the sender. A sender function of its own
-  needs none of the Cognito or directory permissions above: only this one,
-  `PutItem` and `UpdateItem` on its mail budget table, and the environment in
-  [A separate email sender](#a-separate-email-sender).
+- `kms:Decrypt` on the email key and `secretsmanager:GetSecretValue` on the
+  [mail budget key](#the-mail-budget-key) secret for the sender. A sender
+  function of its own needs none of the Cognito or directory permissions above:
+  only these two, `PutItem` and `UpdateItem` on its mail budget table, and the
+  environment in [A separate email sender](#a-separate-email-sender).
+
+**Mail budget** (with a custom email sender)
+
+- A table with partition key `partitionKey`, sort key `sortKey` (both strings)
+  and TTL attribute `expiresAt`; its name in `MAIL_BUDGET_TABLE`.
+- One Secrets Manager secret per product, in the function's region, protected
+  and retained in production, holding 64 hexadecimal characters. Creating the
+  value outside the deployment keeps it out of the deployment's state:
+
+  ```bash
+  (umask 077; openssl rand -hex 32 > budget.key)
+  aws secretsmanager create-secret --name example/auth/mail-budget-key \
+    --secret-string file://budget.key
+  rm budget.key
+  ```
+
+  To generate it in Pulumi instead, put the `hex` output of a 32-byte
+  `random.RandomBytes` in an `aws.secretsmanager.SecretVersion`.
+- `MAIL_BUDGET_KEY_SECRET` on the sender function: the secret's full ARN or its
+  name.
+- `secretsmanager:GetSecretValue` on that secret in the sender function's role,
+  and in no other function's. Add `kms:Decrypt` on its key if that is customer
+  managed.
+- No rotation schedule: see [The mail budget key](#the-mail-budget-key).
+- The secret, the variable and the grant in place before the sender code that
+  reads them runs: in Pulumi, make the function `dependsOn` the role policy, or
+  deploy them first.
 
 **Directory table**
 

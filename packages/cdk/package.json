@@ -2,7 +2,7 @@
   "name": "@operation-leyline/cardea-cdk",
   "version": "0.1.0",
   "description": "The Cognito pool, providers, clients, domains, directory table and trigger wiring of Cardea, Operation Leyline sign-in,, as one CDK construct.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Operation-Leyline/cardea.git",

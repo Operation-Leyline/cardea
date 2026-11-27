@@ -2,6 +2,7 @@
   "name": "@operation-leyline/cardea-web",
   "version": "0.1.0",
   "description": "Browser sign-in, sessions, provider sign-in and account linking for a Cognito pool.",
+  "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
   "repository": {

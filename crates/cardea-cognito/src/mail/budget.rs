@@ -7,17 +7,24 @@
 //! spends from this budget before it decrypts or sends.
 //!
 //! The table is the caller's (`partitionKey`, `sortKey`, TTL `expiresAt`). A
-//! row is keyed by the hash of the recipient's [`person_key`], never the
-//! address: aliases of one mailbox share a budget, and no address is stored. A
-//! row exists only for a day in which mail was sent, and expires after it.
+//! row is keyed by HMAC-SHA-256 of the recipient's [`person_key`] under the
+//! product's [`BudgetKey`], never the address: aliases of one mailbox share a
+//! budget, no address is stored, and the table alone does not tell whose a row
+//! is. A row exists only for a day in which mail was sent, and expires after
+//! it.
+//!
+//! Rows are named `MAILK#…` and `DELIVERYK#…`. Rows named `MAIL#…` and
+//! `DELIVERY#…`, from earlier deployments, hold unkeyed hashes; they are
+//! neither read nor written, and lapse through their TTL. Changing the key
+//! starts every counter again, since a new key names new rows.
 use aws_sdk_dynamodb::{
     Client,
     operation::transact_write_items::TransactWriteItemsError,
     types::{AttributeValue as Av, Put, TransactWriteItem, Update},
 };
 use cardea_core::person_key;
-use sha2::{Digest, Sha256};
 
+use super::BudgetKey;
 use crate::{TransactError, cause::cause, transact};
 
 /// Messages of [`Counter::General`] one mailbox may be sent in a UTC day. A
@@ -76,17 +83,28 @@ impl Counter {
     }
 }
 
-/// The counter's key: one row per mailbox per counter per UTC day.
-fn key(recipient: &str, counter: Counter, now: i64) -> Result<(String, String), Refusal> {
+/// The counter row's names: one row per mailbox per counter per UTC day.
+fn row_names(
+    key: &BudgetKey,
+    recipient: &str,
+    counter: Counter,
+    now: i64,
+) -> Result<(String, String), Refusal> {
     let mailbox = person_key(recipient).map_err(|_| Refusal::Invalid)?;
     Ok((
-        format!("MAIL#{}", hex::encode(Sha256::digest(mailbox.as_bytes()))),
+        format!("MAILK#{}", key.tag(&mailbox)),
         format!("{}#{}", counter.sort_prefix(), now.div_euclid(DAY_SECONDS)),
     ))
 }
 
+/// The sort key of the row marking `delivery` as counted.
+fn marker_name(key: &BudgetKey, delivery: &str) -> String {
+    format!("DELIVERYK#{}", key.tag(delivery))
+}
+
 /// Spend one message from `recipient`'s `counter` for the UTC day containing
-/// `now` (Unix seconds), or say why not.
+/// `now` (Unix seconds), or say why not. `key` is the product's: the same one
+/// for every message, or the counts are not shared.
 ///
 /// `delivery` names the message (the sender's idempotency key): a retry of a
 /// message already counted spends nothing and is allowed, so a transient
@@ -99,25 +117,20 @@ fn key(recipient: &str, counter: Counter, now: i64) -> Result<(String, String), 
 pub async fn spend(
     ddb: &Client,
     table: &str,
+    key: &BudgetKey,
     recipient: &str,
     delivery: &str,
     counter: Counter,
     now: i64,
 ) -> Result<(), Refusal> {
-    let (partition, sort) = key(recipient, counter, now)?;
+    let (partition, sort) = row_names(key, recipient, counter, now)?;
     // The rows outlive their day by one more, so a clock that is a little
     // behind the table's never reads a lapsed counter as a fresh budget.
     let expires = Av::N(((now.div_euclid(DAY_SECONDS) + 2) * DAY_SECONDS).to_string());
     let marker = Put::builder()
         .table_name(table)
         .item("partitionKey", Av::S(partition.clone()))
-        .item(
-            "sortKey",
-            Av::S(format!(
-                "DELIVERY#{}",
-                hex::encode(Sha256::digest(delivery.as_bytes()))
-            )),
-        )
+        .item("sortKey", Av::S(marker_name(key, delivery)))
         .item("expiresAt", expires.clone())
         .condition_expression("attribute_not_exists(partitionKey)")
         .build()

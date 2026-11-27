@@ -4,8 +4,9 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { describe, expect, it } from 'vitest';
-import { IdentityPool } from '../src';
+import { CustomEmailSenderProps, IdentityPool } from '../src';
 import { build, env, fn, only, statements, webClient } from './support';
 
 const cognitoActions = [
@@ -16,6 +17,7 @@ const cognitoActions = [
 ];
 
 const actionsOf = (statement: any): string[] => [statement.Action].flat();
+const senderActions = ['kms:Decrypt', 'secretsmanager:GetSecretValue'];
 
 describe('triggers', () => {
   it('wires the four triggers and the custom message trigger to the handler', () => {
@@ -98,11 +100,13 @@ describe('triggers', () => {
     },
   );
 
+  /** Every statement attached to the sender function's role, by action. */
   const senderPolicyOf = (template: Template): any[] => {
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
-    const found = policies.filter((p) => JSON.stringify(p.Properties.Roles).includes('Sender'));
-    expect(found).toHaveLength(1);
-    return found[0].Properties.PolicyDocument.Statement;
+    return policies
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes('Sender'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .sort((a, b) => String(a.Action).localeCompare(String(b.Action)));
   };
   const environmentOf = (template: Template, name: string): Record<string, unknown> | undefined => {
     const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
@@ -111,34 +115,50 @@ describe('triggers', () => {
     return (found[0][1] as any).Properties.Environment?.Variables;
   };
 
-  it('lets a separate sender function decrypt and nothing else', () => {
+  it('lets a separate sender function decrypt and read the budget key, and nothing else', () => {
     const { template } = build((stack, handler) => ({
       triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
     }));
     const [keyId] = only(template, 'AWS::KMS::Key');
+    const [secretId] = only(template, 'AWS::SecretsManager::Secret');
     expect(senderPolicyOf(template)).toEqual([
       { Action: 'kms:Decrypt', Effect: 'Allow', Resource: { 'Fn::GetAtt': [keyId, 'Arn'] } },
+      { Action: 'secretsmanager:GetSecretValue', Effect: 'Allow', Resource: { Ref: secretId } },
     ]);
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
-    const handlerPolicy = policies.find((p) => !JSON.stringify(p.Properties.Roles).includes('Sender'));
-    expect(handlerPolicy.Properties.PolicyDocument.Statement.flatMap(actionsOf)).not.toContain('kms:Decrypt');
+    const handlerActions = policies
+      .filter((p) => !JSON.stringify(p.Properties.Roles).includes('Sender'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .flatMap(actionsOf);
+    expect(handlerActions).toContain('cognito-idp:AdminGetUser');
+    expect(handlerActions).not.toContain('kms:Decrypt');
+    expect(handlerActions).not.toContain('secretsmanager:GetSecretValue');
   });
 
-  it('tells a separate sender function in this stack which key to use, and nothing else', () => {
+  it('tells a separate sender function in this stack which keys to use, and nothing else', () => {
     const { template } = build((stack, handler) => ({
       triggers: { handler, customEmailSender: { handler: fn(stack, 'Sender') } },
     }));
     const [keyId] = only(template, 'AWS::KMS::Key');
+    const [secretId] = only(template, 'AWS::SecretsManager::Secret');
     expect(environmentOf(template, 'Sender')).toEqual({
       COGNITO_EMAIL_KEY_ARN: { 'Fn::GetAtt': [keyId, 'Arn'] },
+      MAIL_BUDGET_KEY_SECRET: { Ref: secretId },
     });
     expect(environmentOf(template, 'Triggers')).toBeUndefined();
   });
 
-  it('sets no environment when the handler is the email sender', () => {
+  it('tells a handler that sends the mail only the budget key secret', () => {
     const { template } = build((_, handler) => ({ triggers: { handler, customEmailSender: {} } }));
-    expect(environmentOf(template, 'Triggers')).toBeUndefined();
-    template.resourceCountIs('AWS::IAM::Policy', 1);
+    const [secretId] = only(template, 'AWS::SecretsManager::Secret');
+    expect(environmentOf(template, 'Triggers')).toEqual({ MAIL_BUDGET_KEY_SECRET: { Ref: secretId } });
+    expect(statements(template)).toContainEqual({
+      Action: 'secretsmanager:GetSecretValue',
+      Effect: 'Allow',
+      Resource: { Ref: secretId },
+    });
+    // The trigger policy, and the key's own.
+    template.resourceCountIs('AWS::IAM::Policy', 2);
   });
 
   it('grants an imported sender function through its role and cannot configure it', () => {
@@ -153,7 +173,7 @@ describe('triggers', () => {
         },
       },
     }));
-    expect(senderPolicyOf(template).flatMap(actionsOf)).toEqual(['kms:Decrypt']);
+    expect(senderPolicyOf(template).flatMap(actionsOf)).toEqual(senderActions);
     template.resourceCountIs('AWS::Lambda::Function', 1);
   });
 
@@ -171,13 +191,13 @@ describe('triggers', () => {
     expect(JSON.stringify(environmentOf(template, 'Sender'))).not.toContain('example-identities');
   });
 
-  const twoPools = (key: (stack: Stack) => kms.IKey | undefined) => {
+  const twoPools = (shared: (stack: Stack) => CustomEmailSenderProps) => {
     const stack = new Stack(new App(), 'Test', { env });
     const sender = fn(stack, 'Sender');
-    const shared = key(stack);
+    const keys = shared(stack);
     for (const id of ['First', 'Second']) {
       new IdentityPool(stack, id, {
-        triggers: { handler: fn(stack, `${id}Triggers`), customEmailSender: { handler: sender, key: shared } },
+        triggers: { handler: fn(stack, `${id}Triggers`), customEmailSender: { handler: sender, ...keys } },
         webClient,
         domainPrefix: `example-${id.toLowerCase()}`,
       });
@@ -185,14 +205,30 @@ describe('triggers', () => {
     return stack;
   };
 
+  const sharedSecret = (stack: Stack) => secretsmanager.Secret.fromSecretNameV2(stack, 'Shared', 'example/budget');
+
   it('refuses one sender function for two pools with different email keys', () => {
-    expect(() => twoPools(() => undefined)).toThrow(/sender function of its own/);
+    expect(() => twoPools((s) => ({ budgetKeySecret: sharedSecret(s) }))).toThrow(
+      /another email key; give each such pool a sender function of its own/,
+    );
   });
 
-  it('lets two pools with directory tables of their own share a sender and a key', () => {
-    const template = Template.fromStack(twoPools((s) => new kms.Key(s, 'SharedKey')));
+  it('refuses one sender function for two pools with different budget keys', () => {
+    expect(() => twoPools((s) => ({ key: new kms.Key(s, 'SharedKey') }))).toThrow(
+      /another mail budget key; give each such pool a sender function of its own/,
+    );
+  });
+
+  it('lets two pools with directory tables of their own share a sender and its keys', () => {
+    const template = Template.fromStack(
+      twoPools((s) => ({ key: new kms.Key(s, 'SharedKey'), budgetKeySecret: sharedSecret(s) })),
+    );
     template.resourceCountIs('AWS::DynamoDB::GlobalTable', 2);
-    expect(Object.keys(environmentOf(template, 'Sender')!)).toEqual(['COGNITO_EMAIL_KEY_ARN']);
+    template.resourceCountIs('AWS::SecretsManager::Secret', 0);
+    expect(Object.keys(environmentOf(template, 'Sender')!).sort()).toEqual([
+      'COGNITO_EMAIL_KEY_ARN',
+      'MAIL_BUDGET_KEY_SECRET',
+    ]);
   });
 
   it('leaves a separate sender in another stack to configure itself', () => {
@@ -204,7 +240,7 @@ describe('triggers', () => {
       webClient,
     });
     expect(environmentOf(Template.fromStack(functions), 'Sender')).toBeUndefined();
-    expect(senderPolicyOf(Template.fromStack(auth)).flatMap(actionsOf)).toEqual(['kms:Decrypt']);
+    expect(senderPolicyOf(Template.fromStack(auth)).flatMap(actionsOf)).toEqual(senderActions);
   });
 
   it('has no cycle when the product reads the table name and key, or grants its own resources', () => {
@@ -234,7 +270,8 @@ describe('triggers', () => {
     expect(functions.dependencies).not.toContain(auth);
   });
 
-  it.each(['table name', 'key ARN'])('cannot hand a function in another stack the generated %s', (value) => {
+  const generated = ['table name', 'key ARN', 'budget key secret ARN'];
+  it.each(generated)('cannot hand a function in another stack the generated %s', (value) => {
     const app = new App();
     const functions = new Stack(app, 'Functions', { env });
     const auth = new Stack(app, 'Auth', { env });
@@ -244,10 +281,12 @@ describe('triggers', () => {
       webClient,
     });
     expect(() => {
-      handler.addEnvironment(
-        'VALUE',
-        value === 'table name' ? identity.directory.tableName : identity.emailKey!.keyArn,
-      );
+      const values: Record<string, string> = {
+        'table name': identity.directory.tableName,
+        'key ARN': identity.emailKey!.keyArn,
+        'budget key secret ARN': identity.mailBudgetKey!.secretArn,
+      };
+      handler.addEnvironment('VALUE', values[value]);
       app.synth();
     }).toThrow(/cyclic reference/);
   });
@@ -258,13 +297,15 @@ describe('triggers', () => {
     const auth = new Stack(app, 'Auth', { env });
     const handler = fn(functions);
     const key = new kms.Key(functions, 'EmailCodeKey', { enableKeyRotation: true });
+    const budgetKeySecret = new secretsmanager.Secret(functions, 'MailBudgetKey');
     new IdentityPool(auth, 'Identity', {
-      triggers: { handler, customEmailSender: { key } },
+      triggers: { handler, customEmailSender: { key, budgetKeySecret } },
       directory: { tableName: 'example-identities' },
       webClient,
     });
     handler.addEnvironment('IDENTITIES_TABLE', 'example-identities');
     handler.addEnvironment('COGNITO_EMAIL_KEY_ARN', key.keyArn);
+    handler.addEnvironment('MAIL_BUDGET_KEY_SECRET', budgetKeySecret.secretArn);
     expect(() => app.synth()).not.toThrow();
     expect(auth.dependencies).toContain(functions);
     expect(functions.dependencies).not.toContain(auth);

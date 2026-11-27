@@ -5,9 +5,13 @@ use aws_sdk_dynamodb::Client as Dynamo;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::sync::OnceCell;
 
-use super::{Code, MailDelivery, MailMessage, MessageKind, Refusal, Template, budget};
-use crate::{directory::now, email_change, triggers::ProductError};
+use super::{
+    BudgetKey, BudgetKeySource, Code, KeyError, MailDelivery, MailMessage, MessageKind, Refusal,
+    Template, budget,
+};
+use crate::{cause::cause, directory::now, email_change, triggers::ProductError};
 
 /// The longest encrypted code accepted, in base64.
 const MAX_CODE_BYTES: usize = 32_768;
@@ -38,6 +42,10 @@ pub enum MailError {
     /// The budget refused the message.
     #[error(transparent)]
     Refused(#[from] Refusal),
+    /// There is no budget key. It reads as [`Refusal::Unavailable`] does: the
+    /// cause is for the log, not the caller.
+    #[error("email service is unavailable; retry the same request")]
+    BudgetKey(#[source] KeyError),
     /// The encrypted code is too large.
     #[error("Cognito ciphertext too large")]
     CodeTooLarge,
@@ -58,11 +66,14 @@ pub enum MailError {
     Delivery(#[source] ProductError),
 }
 
-/// What a delivery needs besides the product: the budget's table and the key
-/// that opens Cognito's codes.
+/// What a delivery needs besides the product: the budget's table and key, and
+/// what opens Cognito's codes. Keep one for the life of the function: it reads
+/// the budget key once.
 pub struct EmailSender {
     ddb: Dynamo,
     budget_table: String,
+    key_source: Box<dyn BudgetKeySource>,
+    key: OnceCell<BudgetKey>,
     decryptor: Box<dyn CodeDecryptor>,
 }
 
@@ -103,13 +114,32 @@ fn delivery_key(event: &Value, template: &Template, request_id: &str) -> String 
 }
 
 impl EmailSender {
-    /// A sender counting against `budget_table`.
-    pub fn new(ddb: Dynamo, budget_table: String, decryptor: impl CodeDecryptor + 'static) -> Self {
+    /// A sender counting against `budget_table`, in rows named under the key
+    /// `key` gives.
+    pub fn new(
+        ddb: Dynamo,
+        budget_table: String,
+        key: impl BudgetKeySource + 'static,
+        decryptor: impl CodeDecryptor + 'static,
+    ) -> Self {
         Self {
             ddb,
             budget_table,
+            key_source: Box::new(key),
+            key: OnceCell::new(),
             decryptor: Box::new(decryptor),
         }
+    }
+
+    /// The budget key, read on first use. A failure is not remembered.
+    async fn budget_key(&self) -> Result<&BudgetKey, MailError> {
+        self.key
+            .get_or_try_init(|| self.key_source.load())
+            .await
+            .map_err(|error| {
+                tracing::error!(cause = %cause(&error), "mail budget key unavailable");
+                MailError::BudgetKey(error)
+            })
     }
 
     /// Send the message a `CustomEmailSender_*` event asks for. The answer is
@@ -119,11 +149,25 @@ impl EmailSender {
     /// [`Error::EmailChange`](cardea_core::Error::EmailChange), with nothing
     /// spent or sent: every `_UpdateUserAttribute`, and a
     /// `_VerifyUserAttribute` unless the event's `email_verified` is false.
+    ///
+    /// Without a budget key nothing is spent or sent either
+    /// ([`MailError::BudgetKey`]), whatever the message.
     pub async fn send(
         &self,
         delivery: &dyn MailDelivery,
         event: &Value,
         request_id: &str,
+    ) -> Result<Value, MailError> {
+        self.send_at(delivery, event, request_id, now()).await
+    }
+
+    /// [`EmailSender::send`], counting in the UTC day that holds `time`.
+    async fn send_at(
+        &self,
+        delivery: &dyn MailDelivery,
+        event: &Value,
+        request_id: &str,
+        time: i64,
     ) -> Result<Value, MailError> {
         if required(&event["request"], "type")? != "customEmailSenderRequestV1" {
             return Err(MailError::UnsupportedVersion);
@@ -134,6 +178,7 @@ impl EmailSender {
         let recipient = required(&event["request"]["userAttributes"], "email")?;
         let template = delivery.template(kind).map_err(MailError::Template)?;
         let key = delivery_key(event, &template, request_id);
+        let budget_key = self.budget_key().await?;
         // Spent before decrypting or sending anything, so a refused request
         // costs one transaction. The delivery key names the message: a retry
         // of one already counted spends nothing, so retries after a failed
@@ -142,10 +187,11 @@ impl EmailSender {
             budget::spend(
                 &self.ddb,
                 &self.budget_table,
+                budget_key,
                 recipient,
                 &key,
                 counter,
-                now(),
+                time,
             )
             .await?;
         }
