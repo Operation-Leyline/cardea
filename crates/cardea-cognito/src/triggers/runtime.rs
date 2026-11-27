@@ -6,15 +6,18 @@ use aws_config::SdkConfig;
 use lambda_runtime::{LambdaEvent, service_fn};
 use serde_json::Value;
 
-use super::{Product, TriggerError, handle};
-use crate::directory::{AwsDirectory, config};
+use super::{Product, TriggerError, custom_auth, handle, handle_challenge};
+use crate::{
+    directory::{AwsDirectory, config},
+    native::{TicketKey, TicketKeyError, TicketKeySource},
+};
 
 /// What a failed invocation, or a function that could not start, reports.
 type Failure = lambda_runtime::Error;
 
 /// A product and the configuration it is served under. Use it to wrap each
-/// invocation in the product's own tracing, or to give the mail budget's key a
-/// source of the product's own; otherwise call [`run`].
+/// invocation in the product's own tracing, or to give the mail budget's key or
+/// the sign-in ticket's a source of the product's own; otherwise call [`run`].
 pub struct TriggerHandler<P> {
     product: P,
     config: SdkConfig,
@@ -25,6 +28,12 @@ pub struct TriggerHandler<P> {
     /// Built for the first mail event and kept, with whatever key it holds.
     #[cfg(feature = "email-sender")]
     sender: tokio::sync::OnceCell<crate::mail::EmailSender>,
+    /// Where custom challenges get the ticket key; none means the secret
+    /// `SIGN_IN_TICKET_KEY_SECRET` names.
+    ticket_keys: Option<Arc<dyn TicketKeySource>>,
+    /// That secret, read when a ticket is first checked.
+    #[cfg(feature = "native-sign-in")]
+    ticket_secret: tokio::sync::OnceCell<crate::native::SecretsManagerTicketKey>,
 }
 
 impl<P: Product> TriggerHandler<P> {
@@ -37,7 +46,19 @@ impl<P: Product> TriggerHandler<P> {
             key_source: None,
             #[cfg(feature = "email-sender")]
             sender: tokio::sync::OnceCell::new(),
+            ticket_keys: None,
+            #[cfg(feature = "native-sign-in")]
+            ticket_secret: tokio::sync::OnceCell::new(),
         }
+    }
+
+    /// Take the sign-in ticket key from `source`, asked whenever a ticket is
+    /// checked, rather than from the secret `SIGN_IN_TICKET_KEY_SECRET`
+    /// names, which is then not read. Give the product's API service the same
+    /// key ([`crate::native`]).
+    pub fn with_ticket_key_source(mut self, source: impl TicketKeySource + 'static) -> Self {
+        self.ticket_keys = Some(Arc::new(source));
+        self
     }
 
     /// Take the mail budget key from `source`, asked for every mail event,
@@ -84,7 +105,34 @@ impl<P: Product> TriggerHandler<P> {
             .filter(|s| !s.is_empty())
             .ok_or(TriggerError::MissingField("user pool"))?;
         let directory = AwsDirectory::from_env_with(&self.config, pool.into())?;
+        if payload["triggerSource"]
+            .as_str()
+            .is_some_and(custom_auth::serves)
+        {
+            return Ok(handle_challenge(&directory, &TicketKeys(self), payload).await?);
+        }
         Ok(handle(&directory, &self.product, payload).await?)
+    }
+
+    /// The ticket key, from the product's source or the configured secret.
+    async fn ticket_key(&self) -> Result<TicketKey, TicketKeyError> {
+        if let Some(source) = &self.ticket_keys {
+            return source.load().await;
+        }
+        #[cfg(feature = "native-sign-in")]
+        {
+            let secret = self
+                .ticket_secret
+                .get_or_try_init(|| async {
+                    crate::native::SecretsManagerTicketKey::from_env(&self.config)
+                })
+                .await?;
+            secret.load().await
+        }
+        #[cfg(not(feature = "native-sign-in"))]
+        Err(TicketKeyError::Read(
+            "built without the native-sign-in feature, and given no key source".into(),
+        ))
     }
 
     #[cfg(feature = "email-sender")]
@@ -121,6 +169,16 @@ impl<P: Product> TriggerHandler<P> {
     #[cfg(not(feature = "email-sender"))]
     async fn send_mail(&self, _payload: &Value, _request_id: &str) -> Result<Value, Failure> {
         Err("built without the email-sender feature".into())
+    }
+}
+
+/// A handler's ticket key as a source.
+struct TicketKeys<'a, P>(&'a TriggerHandler<P>);
+
+#[async_trait::async_trait]
+impl<P: Product> TicketKeySource for TicketKeys<'_, P> {
+    async fn load(&self) -> Result<TicketKey, TicketKeyError> {
+        self.0.ticket_key().await
     }
 }
 

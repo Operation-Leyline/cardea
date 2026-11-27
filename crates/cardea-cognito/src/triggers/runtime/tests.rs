@@ -71,7 +71,18 @@ fn handler(outbox: Outbox) -> TriggerHandler<Mailer> {
         config: SdkConfig::builder().build(),
         key_source: None,
         sender: OnceCell::new(),
+        ticket_keys: None,
+        #[cfg(feature = "native-sign-in")]
+        ticket_secret: OnceCell::new(),
     }
+}
+
+/// A product's own ticket key source is asked, and no variable is needed.
+#[tokio::test]
+async fn a_given_ticket_key_source_is_asked() {
+    let key = crate::native::TicketKey::from_secret(&"ab".repeat(32)).unwrap();
+    let handler = handler(Outbox::default()).with_ticket_key_source(key);
+    assert!(handler.ticket_key().await.is_ok());
 }
 
 /// A message that needs neither the table nor the decryptor.

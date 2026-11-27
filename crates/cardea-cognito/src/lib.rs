@@ -1,7 +1,7 @@
 //! Cardea over AWS: the directory table, the Cognito admin calls, the trigger
 //! handler a product runs as its Lambda, the operations its API offers a
-//! signed-in person ([`link`] and [`methods`]), and the verification-mail
-//! budget. For adoption and account deletion it also fills the directory for a
+//! signed-in person ([`link`] and [`methods`]) and someone signing in with a
+//! provider natively ([`native`]), and the verification-mail budget. For adoption and account deletion it also fills the directory for a
 //! pool that has users ([`backfill`]) and removes a deleted account's rows
 //! ([`erasure`]).
 //!
@@ -20,6 +20,7 @@ mod error;
 pub mod link;
 pub mod mail;
 pub mod methods;
+pub mod native;
 pub mod proof;
 pub mod record;
 mod transact;

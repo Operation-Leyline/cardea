@@ -24,6 +24,8 @@ public enum class CardeaErrorCode(public val code: String, internal val text: St
     ProofFailed("proof-failed", "The provider could not confirm your identity."),
     NonceMismatch("nonce-mismatch", "The provider's answer belongs to a different request."),
     RecentSignInRequired("recent-sign-in-required", "Sign in again, then retry linking."),
+    LinkRequired("link-required", "Sign in with your existing method and link this provider from your profile."),
+    ChallengeUnsupported("challenge-unsupported", "This account needs a sign-in step that is not supported."),
 }
 
 /**
@@ -40,3 +42,11 @@ public open class CardeaException(public val errorCode: CardeaErrorCode) : Excep
  * product's API answers `recentSignInRequired`.
  */
 public class RecentSignInRequiredException : CardeaException(CardeaErrorCode.RecentSignInRequired)
+
+/**
+ * A native sign-in refused because the person must first sign in their existing
+ * way and link the provider from their account. A
+ * [com.operationleyline.cardea.signin.ProviderSignInAdapter] throws this when the
+ * product's API answers `identityLinkRequired`.
+ */
+public class LinkRequiredException : CardeaException(CardeaErrorCode.LinkRequired)

@@ -37,17 +37,19 @@ What this rules out:
 crates/
   cardea-core      pure rules: person key, providers, resolution, errors. No AWS.
   cardea-cognito   the directory table, Cognito admin calls, the trigger handler,
-                     link challenges, sign-in methods, the mail budget.
+                     link challenges, sign-in methods, native sign-in, the mail
+                     budget.
 packages/
   web                @operation-leyline/cardea-web: browser sign-in, sessions,
-                     provider sign-in, link-a-method hooks (React optional).
+                     provider sign-in (redirect and native), link-a-method hooks
+                     (React optional).
   cdk                @operation-leyline/cardea-cdk: the pool, providers, clients,
                      domains, table and trigger wiring as one construct.
 kotlin/
-  cardea-kotlin-core     native sign-in on the hosted pages, sessions, linking and
-                         desktop sign-in; any JVM.
+  cardea-kotlin-core     sign-in on the hosted pages and with a provider's token,
+                         sessions, linking and desktop sign-in; any JVM.
   cardea-kotlin-android  Custom Tabs and the redirect, Keystore storage, Google
-                         proofs.
+                         sign-in and proofs through Credential Manager.
 ```
 
 Rust crates are consumed by pinned git rev. The npm packages are published to
@@ -114,6 +116,8 @@ Partition key `identityKey`, TTL attribute `expiresAt`.
 | `PROVIDER#Google#{subject}` | unchanged; Google keeps this exact key |
 | `PROVIDER#{Provider}#{subject}` | new providers, same attributes |
 | `LINK#{userId}#{linkId}` | link challenge: provider (a row without it is Google), nonce, deadline, proof digest, receipt; 24 h TTL |
+| `NONCE#{hmac}` | new: an unused [native sign-in](#signing-in-with-a-provider-natively) nonce: deadline; TTL at the deadline |
+| `TICKET#{hmac}` | new: an unredeemed native sign-in ticket: `userId`, app client, provider and subject that proved the person, deadline; TTL at the deadline |
 | `METHODS#{userId}` | new: the identities linked onto the user (provider, subject, the email as the provider gave it, whether an unlink is unfinished) and a `version` every write is conditional on; during an erasure, `erasingMailboxes` |
 | `MAILK#{hmac(personKey)}` / `SEND#{day}`, `RESET#{day}`, `DELIVERYK#{hmac(delivery)}` | the mail budget, counted per UTC day: `SEND#` allows 8 signup, resend, attribute-verification and authentication codes, `RESET#` allows 3 password reset codes, so reset requests cannot use up the others; `DELIVERYK#` marks a message already counted. `hmac` is under the product's [mail budget key](#the-mail-budget-key). These rows are not in the directory table: the library takes the name of the product's budget table as configuration |
 
@@ -278,7 +282,8 @@ fn main() { cardea_cognito::triggers::run(MyProduct::from_env()) }
 | `InboundFederation_ExternalProvider` | resolve the identity, create the native user if needed, link, return every attribute the provider sent with the canonical email in place of its own, and no empty value. No failed first attempt. |
 | `PostConfirmation_ConfirmSignUp` | provision through the product hook |
 | `PostConfirmation_ConfirmForgotPassword` | set `passwordSet` |
-| `PreTokenGeneration` | provision if not yet (operator-created accounts), then the product's claims; a machine client's `TokenGeneration_ClientCredentials` passes through untouched |
+| `PreTokenGeneration` | provision if not yet (operator-created accounts and accounts a native sign-in made), then the product's claims; a machine client's `TokenGeneration_ClientCredentials` passes through untouched |
+| `DefineAuthChallenge`, `CreateAuthChallenge`, `VerifyAuthChallengeResponse` | the custom flow of [native sign-in](#signing-in-with-a-provider-natively): one challenge, answered with a ticket |
 | `CustomMessage_*` | refuse every `_UpdateUserAttribute`, and `_VerifyUserAttribute` unless `email_verified` is false (below); otherwise return the event untouched |
 | `CustomEmailSender_*` | refuse the same two; spend the mailbox's daily budget (8, or 3 for password resets), decrypt, hand to `mail()` |
 
@@ -355,6 +360,138 @@ Google names the Android app's own OAuth client in `azp`.
 API keys can call none of these. Errors stay generic and never reveal
 another account.
 
+## Signing in with a provider natively
+
+Decided 2026-11-27. A person can sign in with Google without the browser
+redirect: on Android through Credential Manager's account sheet, on the web
+through Google Identity Services (the button's popup, or One Tap). The redirect
+stays as the fallback. It is opt-in per product and per app client. Apple has no
+native sign-in. Password sign-in in a native app stays on the hosted page.
+
+Cognito cannot take a provider's ID token itself, so the library checks the
+token and then signs the person in through Cognito's custom authentication
+flow:
+
+| Step | Who | Does |
+|---|---|---|
+| 1 | app → product API | `CreateSignInNonce` (`create_sign_in_nonce`): a new nonce and the product's Google web client id |
+| 2 | app → Google | an ID token carrying that nonce |
+| 3 | app → product API | `BeginProviderSignIn` (`begin_provider_sign_in`): checks the token, spends the nonce, resolves the person, answers `username` and a single-use `ticket` |
+| 4 | app → Cognito | `InitiateAuth`, `CUSTOM_AUTH`, with the username |
+| 5 | app → Cognito | `RespondToAuthChallenge` with the ticket; Cognito issues its usual tokens |
+
+The tokens are ordinary Cognito tokens of that app client. They refresh with
+`REFRESH_TOKEN_AUTH` at the user pool's API, and no hosted session goes with
+them, so signing out does not visit the hosted domain.
+
+Shapes (field names fixed by the client packages' adapters):
+
+| Operation | Input | Output |
+|---|---|---|
+| `CreateSignInNonce` | `provider` (`Google`) | `nonce`, `clientId`, `expiresAt` (a date and time) |
+| `BeginProviderSignIn` | `provider`, `idToken`, `appClientId` | `username`, `ticket` |
+
+### One account, either way
+
+Step 3 resolves with `resolve` and no session: the rules of
+[inbound federation](#the-trigger-handler), with the same refusals
+(`identityLinkRequired` for an address Google does not own, disposable domains,
+an unconfirmed signup of the address, a disabled account, a directory not yet
+open). It creates the native user if the mailbox has none and links the identity
+onto it. The identity's binding is the `PROVIDER#Google#{subject}` row the
+redirect uses, so whichever way a person signs in first, the other reaches the
+same account.
+
+### The nonce
+
+The server issues it, so a token somebody already holds, or one an app asked
+for with a nonce of its own choosing, signs nobody in. It is 244 random bits,
+lasts ten minutes and is spent once. The table holds only its HMAC, and one
+delete conditional on the deadline spends it. It is stored rather than signed:
+a signed nonce would still need a record of the used ones.
+
+Before the nonce is spent, the token passes every check a link proof does:
+signature, issuer, audience equal to the web client id,
+[authorized party](#sign-in-methods-and-linking), expiry, issue time within five
+minutes, a verified email and the nonce itself. A token that fails spends
+nothing. A token that passes is good for one call, even if resolving then
+refuses.
+
+### The ticket
+
+- 244 random bits, good for two minutes.
+- The table holds only its HMAC, over the pool, username, `userId`, app client
+  and the ticket. Presented for anyone or anywhere else it names no row. Writing
+  the table is not enough to make a ticket, and reading it is not enough to use
+  one.
+- Returned only once its row is written, and only for an app client the product
+  listed.
+- Redeemed by the verify trigger: the row must name the same user and app client
+  and be unexpired; one delete conditional on all three removes it, so one
+  caller succeeds; and the identity that proved the person must still be bound
+  to that user, with no unlink of it under way.
+
+### The custom flow
+
+- `DefineAuthChallenge` asks for exactly one `CUSTOM_CHALLENGE`, and issues
+  tokens only for a session holding that one challenge, defined by the library,
+  answered correctly. A wrong answer ends the session. A session with any other
+  step (SRP, password, MFA, a second challenge) fails.
+- `CreateAuthChallenge` makes only that challenge, as the first step.
+- Anyone can start the flow for any username. For one the pool does not have,
+  with user-existence errors hidden on the client, the steps look the same up to
+  the refusal.
+- `ALLOW_CUSTOM_AUTH` is on only for the app clients that chose native sign-in.
+  A client with no list of flows allows it by default, so every client lists its
+  flows.
+
+### The key
+
+Nonce and ticket rows are named by HMAC-SHA-256 under a secret of their own:
+64 hexadecimal characters in Secrets Manager, named by
+`SIGN_IN_TICKET_KEY_SECRET`, read by the trigger function and the product's API
+service. It is not the mail budget key: that one belongs to the mail sender,
+which has no business making sign-ins, and a product without a custom email
+sender has none. A running instance keeps the value for five minutes.
+Rotation costs only the sign-ins under way. A product with its own secrets layer
+implements `TicketKeySource`. Without a key nothing is issued and nothing is
+redeemed.
+
+### Fallbacks
+
+| Where | Redirect instead when |
+|---|---|
+| Web, popup | Google's script is blocked or cannot draw, or the app has no adapter (on unless turned off) |
+| Web, One Tap | the same, only if the app asks: a page shows One Tap on its own, and must not send every visitor away |
+| Android | Credential Manager has no provider, no support or no account |
+| Desktop | always: it has no account sheet |
+
+A refusal by the person, and any answer of the product's API, never falls back.
+Google's button reports nothing when its popup is blocked, so a web app keeps a
+redirect button within reach.
+
+### What the product owes
+
+- **Rate limits on both operations**, per caller. Both are public and
+  unauthenticated: a nonce writes a row, and beginning a sign-in can create a
+  user. The library limits neither.
+- Answer errors generically. `identityLinkRequired` is the one a client acts on.
+  The refusals say what the redirect sign-in's do: `identityLinkRequired`
+  depends on whether Google owns the address, not on whether an account exists.
+- Log no nonce, token, ticket or username.
+- Give the API service the table, the key and `AdminGetUser`, `AdminCreateUser`,
+  `AdminSetUserPassword` and `AdminLinkProviderForUser` (`grantNativeSignIn`).
+- Build the trigger function with the `native-sign-in` feature.
+- For Android, create the Google Android client and list it as an authorized
+  party on the verifier.
+
+### Second factors
+
+The flow asks for no second factor of its own, as a redirect sign-in with Google
+asks for none from the pool. If a pool prompts for one after the custom
+challenge, the library's flow refuses the sign-in
+(`challenge-unsupported`) and the person uses the redirect.
+
 ## Erasing an account
 
 Deleting a Cognito user leaves its `EMAIL#`, `PROVIDER#` and `METHODS#` rows
@@ -389,7 +526,9 @@ the user; the library never does.
   user stays behind.
 - The report counts rows removed and left. It holds no address.
 - Both steps refuse until the directory is open.
-- `LINK#` challenges and mail budget rows expire on their own.
+- `LINK#` challenges, native sign-in's `NONCE#` and `TICKET#` rows and mail
+  budget rows expire on their own. A ticket for an erased identity signs nobody
+  in.
 
 The worker needs `AdminGetUser` on the pool and `GetItem`, `PutItem`,
 `UpdateItem` and `DeleteItem` on the table (`grantErasure` in the CDK package),
@@ -500,6 +639,8 @@ web app would otherwise carry:
 - sessions in localStorage keyed by issuer and client id; one refresh at a
   time; a `storage` listener that reports another tab's sign-out or account
   change; sign-out of this browser and of the hosted session;
+- [native Google sign-in](#signing-in-with-a-provider-natively): popup button
+  or One Tap, then the custom flow, with the redirect as fallback;
 - linking: get a provider ID token carrying the challenge's nonce (Google
   Identity Services; Sign in with Apple JS), call the product's
   `CompleteIdentityLink`; list and unlink; "set a password" through the
@@ -519,7 +660,9 @@ policy, email-only recovery, optional TOTP), the prefix domain and an
 optional branded domain, Google and Apple providers from Secrets Manager,
 the web client and an optional localhost dev client, the directory table
 (on-demand, TTL, point-in-time recovery, retained), the trigger wiring for a
-product-built function, and, for a custom email sender, its KMS key and the
+product-built function, and, if asked, native sign-in (the three challenge
+triggers, the custom flow on chosen clients, its key and
+`grantNativeSignIn`), and, for a custom email sender, its KMS key and the
 [mail budget key](#the-mail-budget-key) secret (generated and retained like the
 table, unless the product passes one), which only the sender function may read.
 It grants a product's API service the sign-in method operations
@@ -551,6 +694,7 @@ product that does not use CDK wires the same settings itself;
 
 GitHub (not OpenID Connect; needs an adapter service), Microsoft, sign-out
 on every device (token revocation), SAML.
+Native Sign in with Apple. A password form in a native app.
 Changing a person's email (needs a verified move of the mailbox claim).
 
 ## Open questions

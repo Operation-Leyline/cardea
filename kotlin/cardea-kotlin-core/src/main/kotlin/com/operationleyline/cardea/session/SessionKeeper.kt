@@ -74,7 +74,8 @@ internal class SessionKeeper(private val config: CardeaConfig, private val store
         events.enqueue(SessionEvent.Expired(old.toSession(config.userIdClaim)))
     }
 
-    suspend fun signOut(alsoForget: suspend () -> Unit): Unit = commit {
+    /** Ends the session and returns what it was, if there was one. */
+    suspend fun signOut(alsoForget: suspend () -> Unit): StoredSession? = commit {
         runCatching { load() }
         val previous = record
         mark++
@@ -85,6 +86,7 @@ internal class SessionKeeper(private val config: CardeaConfig, private val store
         alsoForget()
         // Reported: a session left in storage would come back at the next start.
         failingWith(CardeaErrorCode.StorageUnavailable) { store.clear() }
+        previous
     }
 
     /** A locked change that, once begun, finishes even if the caller is cancelled. */

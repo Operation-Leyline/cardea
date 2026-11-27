@@ -32,6 +32,8 @@ export interface ServiceGrant {
   readonly policyId: string;
   /** The Cognito actions on this pool. Read and write on the directory table come with every grant. */
   readonly poolActions: string[];
+  /** Anything else the operations need. */
+  readonly statements?: iam.PolicyStatement[];
 }
 
 /**
@@ -71,6 +73,7 @@ export function grantService(
   }
   resources.userPool.grant(target, ...grant.poolActions);
   resources.directory.grantReadWriteData(target);
+  for (const statement of grant.statements ?? []) target.grantPrincipal.addToPrincipalPolicy(statement);
 }
 
 /** Defined and imported roles alike; `instanceof iam.Role` would miss the latter. */

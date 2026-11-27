@@ -9,6 +9,11 @@ export type { ErasureGrantOptions } from './erasure';
 export { IdentityPool } from './identity-pool';
 export type { IdentityPoolProps } from './identity-pool';
 export type { LogicalIds } from './logical-ids';
+export type {
+  NativeProviderSignInProps,
+  NativeSignInClient,
+  NativeSignInGrantOptions,
+} from './native-sign-in';
 export type { ProviderSecretProps } from './providers';
 export type { SignInMethodsGrantOptions } from './sign-in-methods';
 export type { CustomEmailSenderProps, TriggerProps } from './triggers';

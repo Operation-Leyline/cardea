@@ -1,5 +1,5 @@
 import { CardeaError } from "../errors.js";
-import { isFresh, justIssued, subjectOf, type SessionMethod, type StoredSession } from "./record.js";
+import { isFresh, justIssued, subjectOf, type StoredSession } from "./record.js";
 import type { SessionStore } from "./store.js";
 
 export interface Tokens {
@@ -19,13 +19,13 @@ export type TokenSource = (record: StoredSession) => Promise<Tokens>;
  * Concurrent callers share one request. A response that arrives after a
  * sign-out, a new sign-in or another tab's change is discarded.
  */
-export function createRefresher(store: SessionStore, source: (method: SessionMethod) => TokenSource) {
+export function createRefresher(store: SessionStore, source: (record: StoredSession) => TokenSource) {
   let running: { raw: string; saved: Promise<string | null> } | null = null;
 
   /** Resolves with what it wrote to storage, or `null` when it wrote nothing. */
   async function refresh(raw: string, record: StoredSession): Promise<string | null> {
     try {
-      const tokens = await source(record.method)(record);
+      const tokens = await source(record)(record);
       const next = justIssued({ ...record, ...tokens });
       if (subjectOf(next) !== subjectOf(record)) throw new CardeaError("token-verification-failed");
       if (store.read().raw !== raw) return null;

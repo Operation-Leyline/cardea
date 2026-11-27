@@ -1,12 +1,13 @@
-//! The directory table's five row kinds as strict records.
+//! The directory table's row kinds as strict records.
 //!
 //! The partition key, `identityKey`, tells them apart: the readiness marker,
 //! the row that owns a mailbox, the row that owns a provider subject, a link
-//! challenge, and the list of a user's linked identities. The first four are
-//! the wire format of tables that earlier deployments wrote (a link challenge's
-//! `provider` and the whole list are additions): attribute names, types and key
-//! shapes are frozen by tests, and a row that carries anything else fails to
-//! decode. The table's TTL attribute is `expiresAt`.
+//! challenge, the list of a user's linked identities, and the nonce and ticket
+//! of a [native sign-in](crate::native). The first four are the wire format of
+//! tables that earlier deployments wrote (a link challenge's `provider`, the
+//! whole list and the two native sign-in rows are additions): attribute names,
+//! types and key shapes are frozen by tests, and a row that carries anything
+//! else fails to decode. The table's TTL attribute is `expiresAt`.
 
 use std::marker::PhantomData;
 
@@ -19,7 +20,7 @@ use tabulary::{
 };
 
 /// Every row the table may hold. The derive proves at compile time that the
-/// five key patterns are disjoint.
+/// key patterns are disjoint.
 #[derive(Debug, MultiObject)]
 #[tabulary(partition = "identityKey")]
 pub enum IdentityTable {
@@ -38,6 +39,12 @@ pub enum IdentityTable {
     /// `METHODS#{userId}`.
     #[tabulary(partition(prefix = "METHODS#"))]
     Methods(MethodsRow),
+    /// `NONCE#{tag}`.
+    #[tabulary(partition(prefix = "NONCE#"))]
+    Nonce(NonceRow),
+    /// `TICKET#{tag}`.
+    #[tabulary(partition(prefix = "TICKET#"))]
+    Ticket(TicketRow),
 }
 
 /// The directory's readiness marker. Signup is refused until it reads
@@ -211,6 +218,63 @@ impl std::fmt::Debug for LinkedIdentity {
         f.debug_struct("LinkedIdentity")
             .field("provider", &self.provider)
             .field("removing", &self.removing)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A nonce issued for a native sign-in and not yet used. Deleting the row is
+/// how the nonce is spent.
+#[derive(Debug, PartialEq, Record)]
+#[tabulary(
+    rename_all = "camelCase",
+    partition(name = "identityKey", template = "NONCE#{tag:text}")
+)]
+pub struct NonceRow {
+    /// The nonce's HMAC under the product's sign-in ticket key. The nonce
+    /// itself is not stored.
+    #[tabulary(key_only)]
+    pub tag: String,
+    /// Epoch seconds after which the nonce is refused.
+    pub deadline: u64,
+    /// The table's TTL attribute, in epoch seconds.
+    pub expires_at: u64,
+}
+
+/// A native sign-in's single-use ticket, not yet redeemed. Deleting the row is
+/// how the ticket is spent.
+#[derive(Clone, PartialEq, Record)]
+#[tabulary(
+    rename_all = "camelCase",
+    partition(name = "identityKey", template = "TICKET#{tag:text}")
+)]
+pub struct TicketRow {
+    /// HMAC, under the product's sign-in ticket key, of the ticket together
+    /// with the pool, username, user and app client it is for. The ticket
+    /// itself is not stored.
+    #[tabulary(key_only)]
+    pub tag: String,
+    /// The user the ticket signs in.
+    pub user_id: String,
+    /// The app client the ticket signs in on.
+    pub client_id: String,
+    /// The Cognito name of the provider that proved the person.
+    pub provider: String,
+    /// The provider's id for the person.
+    pub subject: String,
+    /// Epoch seconds after which the ticket is refused.
+    pub deadline: u64,
+    /// The table's TTL attribute, in epoch seconds.
+    pub expires_at: u64,
+}
+
+/// Leaves the provider subject out, so that printing a row cannot log it.
+impl std::fmt::Debug for TicketRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TicketRow")
+            .field("user_id", &self.user_id)
+            .field("client_id", &self.client_id)
+            .field("provider", &self.provider)
+            .field("deadline", &self.deadline)
             .finish_non_exhaustive()
     }
 }

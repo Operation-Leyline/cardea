@@ -12,6 +12,14 @@ import { addBrandedDomain, BrandedDomainProps } from './domains';
 import { ErasureGrantOptions, grantErasure } from './erasure';
 import { LogicalIds, overrideLogicalIds } from './logical-ids';
 import { addDefaultBranding } from './managed-login';
+import {
+  checkNativeSignIn,
+  grantNativeSignIn,
+  NativeProviderSignInProps,
+  NativeSignInClient,
+  NativeSignInGrantOptions,
+  ticketKey,
+} from './native-sign-in';
 import { publishIds } from './parameters';
 import { addApple, addGoogle, ProviderSecretProps } from './providers';
 import { grantSignInMethods, SignInMethodsGrantOptions } from './sign-in-methods';
@@ -55,6 +63,13 @@ export interface IdentityPoolProps extends UserPoolSettings {
   readonly google?: ProviderSecretProps;
   /** Default: no Apple sign-in. */
   readonly apple?: ProviderSecretProps;
+  /**
+   * Sign in with Google natively (an account sheet or popup, then Cognito's
+   * custom authentication flow): wires the three challenge triggers to the
+   * handler, allows the flow on the chosen clients and gives the handler the
+   * ticket key. See the README, "Native provider sign-in". Default: off.
+   */
+  readonly nativeProviderSignIn?: NativeProviderSignInProps;
   /** Default: a new table in this stack. */
   readonly directory?: DirectoryProps;
   /** Publish the ids to SSM under this prefix, like `/product/auth`. Default: publish nothing. */
@@ -87,21 +102,35 @@ export class IdentityPool extends Construct {
    * budget rows are named under, which its function reads.
    */
   public readonly mailBudgetKey?: secretsmanager.ISecret;
+  /**
+   * Set with `nativeProviderSignIn`; the secret holding the key its nonces and
+   * tickets are named under. The handler and the product's API service read it.
+   */
+  public readonly signInTicketKey?: secretsmanager.ISecret;
   private readonly triggerFunctions: lambda.IFunction[];
 
   constructor(scope: Construct, id: string, props: IdentityPoolProps) {
     super(scope, id);
     const { handler } = props.triggers;
+    const native = props.nativeProviderSignIn;
+    if (native) {
+      checkNativeSignIn(native, {
+        google: props.google !== undefined,
+        dev: props.devClient !== undefined,
+        native: props.nativeClient !== undefined,
+      });
+    }
     const sender = emailSender(this, props.triggers, props.removalPolicy);
     this.emailKey = sender?.key;
     this.mailBudgetKey = sender?.budgetKeySecret;
     this.triggerFunctions = sender ? [handler, sender.handler] : [handler];
 
-    this.userPool = createUserPool(this, props, lambdaTriggers(handler, sender));
+    this.userPool = createUserPool(this, props, lambdaTriggers(handler, sender, native !== undefined));
     wireInboundFederation(this.userPool, handler);
 
     this.directory = directoryTable(this, props.directory ?? {}, props.removalPolicy);
     grantTriggers(this, this.userPool, this.directory, handler, sender);
+    this.signInTicketKey = native && ticketKey(this, native, handler, props.removalPolicy);
 
     const stack = Stack.of(this);
     // Stated either way: a domain left without the property may keep the version
@@ -125,9 +154,14 @@ export class IdentityPool extends Construct {
     const apple = props.apple && addApple(this, this.userPool, props.apple);
     const providers = [google, apple].filter((provider) => provider !== undefined);
     const clients = { providers, adminPasswordSignIn: props.adminPasswordSignIn };
-    this.webClient = addBrowserClient(this.userPool, 'WebClient', props.webClient, clients);
-    this.devClient = props.devClient && addDevClient(this.userPool, props.devClient, clients);
-    this.nativeClient = props.nativeClient && addNativeClient(this.userPool, props.nativeClient, clients);
+    const settings = (client: NativeSignInClient) => ({
+      ...clients,
+      customAuth: native?.clients.includes(client) || undefined,
+    });
+    this.webClient = addBrowserClient(this.userPool, 'WebClient', props.webClient, settings('web'));
+    this.devClient = props.devClient && addDevClient(this.userPool, props.devClient, settings('dev'));
+    this.nativeClient =
+      props.nativeClient && addNativeClient(this.userPool, props.nativeClient, settings('native'));
     if (props.managedLogin) {
       addDefaultBranding(this, 'WebClientBranding', this.userPool, this.webClient, this.prefixDomain);
       if (this.devClient) {
@@ -181,6 +215,18 @@ export class IdentityPool extends Construct {
    */
   grantErasure(grantee: iam.IGrantable, options: ErasureGrantOptions = {}): void {
     grantErasure(this, grantee, this.serviceResources(), options);
+  }
+
+  /**
+   * Grant the product's API service what native sign-in's two public operations
+   * need: `AdminGetUser`, `AdminCreateUser`, `AdminSetUserPassword` and
+   * `AdminLinkProviderForUser` on this pool, read and write on the directory
+   * table, and `GetSecretValue` on the ticket key. The service also needs
+   * `signInTicketKey`'s name, as `SIGN_IN_TICKET_KEY_SECRET`.
+   */
+  grantNativeSignIn(grantee: iam.IGrantable, options: NativeSignInGrantOptions = {}): void {
+    if (!this.signInTicketKey) throw new Error('grantNativeSignIn needs nativeProviderSignIn');
+    grantNativeSignIn(this, grantee, this.serviceResources(), this.signInTicketKey, options);
   }
 
   private serviceResources() {

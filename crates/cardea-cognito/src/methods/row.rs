@@ -58,7 +58,7 @@ impl MethodsRow {
     }
 
     /// Whether an unlink of `identity` is unfinished.
-    pub(super) fn is_removing(&self, identity: &Identity) -> bool {
+    pub(crate) fn is_removing(&self, identity: &Identity) -> bool {
         self.find(identity).is_some_and(|entry| entry.removing)
     }
 }

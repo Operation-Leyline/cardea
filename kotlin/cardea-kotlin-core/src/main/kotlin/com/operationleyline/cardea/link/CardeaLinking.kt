@@ -1,11 +1,11 @@
 package com.operationleyline.cardea.link
 
-import com.nimbusds.jwt.SignedJWT
 import com.operationleyline.cardea.CardeaClient
 import com.operationleyline.cardea.CardeaErrorCode
 import com.operationleyline.cardea.CardeaException
 import com.operationleyline.cardea.Provider
 import com.operationleyline.cardea.RecentSignInRequiredException
+import com.operationleyline.cardea.nonceOf
 import com.operationleyline.cardea.session.Session
 import java.time.Duration
 import java.util.UUID
@@ -144,11 +144,5 @@ public class CardeaLinking(
         if (error is CardeaException) return error.errorCode == CardeaErrorCode.RecentSignInRequired
         val name = error.javaClass.simpleName.removeSuffix("Exception").removeSuffix("Error")
         return name.equals("recentSignInRequired", ignoreCase = true)
-    }
-
-    private fun nonceOf(idToken: String): String? = try {
-        SignedJWT.parse(idToken).jwtClaimsSet.getStringClaim("nonce")
-    } catch (_: java.text.ParseException) {
-        throw CardeaException(CardeaErrorCode.ProofFailed)
     }
 }

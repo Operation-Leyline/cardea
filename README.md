@@ -4,7 +4,8 @@ Named for Cardea, the Roman goddess of door hinges, whose power is "to open
 what is shut, to shut what is open".
 
 Shared Cognito sign-in and account linking: one person is one account, whether
-they sign in with a password, Google or Apple.
+they sign in with a password, Google or Apple. Google can also be used without
+the browser redirect.
 
 - `crates/cardea-core`: rules (person key, providers, resolution). No AWS.
 - `crates/cardea-cognito`: directory table, Cognito triggers, linking, account

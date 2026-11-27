@@ -6,6 +6,7 @@ import com.operationleyline.cardea.CardeaException
 import com.operationleyline.cardea.token.GrantRefused
 import com.operationleyline.cardea.token.TokenEndpoint
 import com.operationleyline.cardea.token.TokenVerifier
+import com.operationleyline.cardea.token.UserPoolApi
 import java.time.Clock
 import java.time.Duration
 import kotlin.coroutines.cancellation.CancellationException
@@ -25,6 +26,7 @@ internal class Refresher(
     private val config: CardeaConfig,
     private val keeper: SessionKeeper,
     private val endpoint: TokenEndpoint,
+    private val pool: UserPoolApi,
     private val verifier: TokenVerifier,
     private val clock: Clock,
     private val scope: CoroutineScope,
@@ -56,11 +58,17 @@ internal class Refresher(
     /** What was saved, or `null` when nothing was. */
     private suspend fun refresh(record: StoredSession): StoredSession? {
         try {
-            val tokens = endpoint.request(
-                mapOf("grant_type" to "refresh_token", "refresh_token" to record.refreshToken),
-            )
+            val tokens = if (record.native) {
+                pool.refresh(record.refreshToken)
+            } else {
+                endpoint.request(
+                    mapOf("grant_type" to "refresh_token", "refresh_token" to record.refreshToken),
+                )
+            }
             verifier.verify(tokens, subject = record.subject)
-            val next = StoredSession.issued(config, tokens, tokens.refreshToken ?: record.refreshToken, clock)
+            val next = StoredSession.issued(
+                config, tokens, tokens.refreshToken ?: record.refreshToken, clock, record.native,
+            )
             return next.takeIf { keeper.replace(record, next) }
         } catch (_: GrantRefused) {
             keeper.expire(record)

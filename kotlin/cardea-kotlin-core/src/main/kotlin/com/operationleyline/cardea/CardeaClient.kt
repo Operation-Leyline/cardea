@@ -1,5 +1,6 @@
 package com.operationleyline.cardea
 
+import com.operationleyline.cardea.link.ProofSource
 import com.operationleyline.cardea.session.Refresher
 import com.operationleyline.cardea.session.Session
 import com.operationleyline.cardea.session.SessionKeeper
@@ -9,12 +10,15 @@ import com.operationleyline.cardea.session.SessionStore
 import com.operationleyline.cardea.signin.AttemptStore
 import com.operationleyline.cardea.signin.AuthorizationRequest
 import com.operationleyline.cardea.signin.InMemoryAttemptStore
+import com.operationleyline.cardea.signin.ProviderSignInAdapter
+import com.operationleyline.cardea.signin.ProviderSignInFlow
 import com.operationleyline.cardea.signin.SignInCheck
 import com.operationleyline.cardea.signin.SignInFlow
 import com.operationleyline.cardea.token.Endpoints
 import com.operationleyline.cardea.token.SigningKeys
 import com.operationleyline.cardea.token.TokenEndpoint
 import com.operationleyline.cardea.token.TokenVerifier
+import com.operationleyline.cardea.token.UserPoolApi
 import java.time.Clock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * Signing in takes two calls around a trip to the browser: [startSignIn] and
  * [completeSignIn]. `DesktopSignIn` and the Android module make that trip.
+ * [signInWithProof] signs in with a provider without one.
  *
  * This library writes no logs.
  */
@@ -50,8 +55,10 @@ public class CardeaClient internal constructor(
     private val keeper = SessionKeeper(config, sessions)
     private val endpoint = TokenEndpoint(endpoints.token, config.clientId)
     private val verifier = TokenVerifier(config, SigningKeys(endpoints.keys, clock), clock)
-    private val refresher = Refresher(config, keeper, endpoint, verifier, clock, scope)
+    private val pool = UserPoolApi(endpoints.userPool, config.clientId)
+    private val refresher = Refresher(config, keeper, endpoint, pool, verifier, clock, scope)
     private val flow = SignInFlow(config, keeper, attempts, endpoint, verifier, check, clock)
+    private val native = ProviderSignInFlow(config, keeper, pool, verifier, check, clock)
 
     /** Who is signed in. It stays [SessionState.Loading] until the store has been read. */
     public val state: StateFlow<SessionState> get() = keeper.state
@@ -88,6 +95,21 @@ public class CardeaClient internal constructor(
      */
     public suspend fun completeSignIn(redirect: String): Session = flow.complete(redirect)
 
+    /**
+     * Signs in with [provider] without leaving the app: asks [adapter] for a
+     * nonce, [source] for the provider's token, [adapter] for a ticket, and the
+     * user pool for tokens, which are verified and saved. Only Google is
+     * offered. `cardea-kotlin-android` wraps this as `signInWithGoogle`.
+     *
+     * @throws LinkRequiredException when the person must link the provider from
+     *   their account first.
+     */
+    public suspend fun signInWithProof(
+        provider: Provider,
+        adapter: ProviderSignInAdapter,
+        source: ProofSource,
+    ): Session = native.signIn(provider, adapter, source) { flow.forget() }
+
     /** Forgets the pending sign-in, if there is one. */
     public suspend fun cancelSignIn(): Unit = flow.cancel()
 
@@ -108,11 +130,13 @@ public class CardeaClient internal constructor(
 
     /**
      * Ends the session on this device and returns the hosted sign-out address,
-     * or `null` without a `logoutUri`. Open it in the browser: otherwise the
-     * browser's hosted session signs the person straight back in.
+     * or `null` when there is nothing to open: without a `logoutUri`, or after
+     * a native sign-in, which made no hosted session. Open it in the browser:
+     * otherwise that session signs the person straight back in.
      */
     public suspend fun signOut(): String? {
-        keeper.signOut { flow.forget() }
+        val ended = keeper.signOut { flow.forget() }
+        if (ended?.native == true) return null
         val back = config.logoutUri ?: return null
         val query = encodeQuery(mapOf("client_id" to config.clientId, "logout_uri" to back))
         return "${config.loginDomain}/logout?$query"

@@ -24,6 +24,8 @@ const MESSAGES = {
   "proof-failed": "The provider could not confirm your identity.",
   "nonce-mismatch": "The provider's answer belongs to a different request.",
   "recent-sign-in-required": "Sign in again, then retry linking.",
+  "link-required": "Sign in with your existing method and link this provider from your profile.",
+  "sign-in-cancelled": "Sign-in was cancelled.",
 } as const;
 
 export type CardeaErrorCode = keyof typeof MESSAGES;

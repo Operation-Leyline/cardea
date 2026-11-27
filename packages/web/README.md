@@ -30,7 +30,7 @@ client.subscribe((event) => {
 | `userPoolId`, `clientId` | The pool and its public web client | required |
 | `loginDomain` | HTTPS origin of the hosted domain | no provider sign-in |
 | `providers` | Providers to offer for sign-in | none |
-| `endpoint` | Local Cognito simulator; switches to `USER_PASSWORD_AUTH` and turns providers off | AWS, with SRP |
+| `endpoint` | Local Cognito simulator; switches to `USER_PASSWORD_AUTH` and turns providers off, native sign-in included | AWS, with SRP |
 | `storagePrefix` | Prefix of browser storage keys | `cardea.auth.` |
 | `callbackPath`, `logoutPath` | Paths registered on the app client | `/auth/callback`, `/` |
 | `scopes` | OAuth scopes; must include `openid` and `email` | `openid email` |
@@ -80,6 +80,57 @@ a fixed message per `code`.
 
 Addresses are trimmed and otherwise sent as typed.
 
+## Native Google sign-in
+
+Google's popup button or One Tap prompt, with no page navigation (DESIGN.md,
+"Signing in with a provider natively"). The pool needs native provider sign-in
+turned on, and the app a `ProviderSignInAdapter` over two public operations of
+its API:
+
+| Method | Calls the library's | Returns |
+| --- | --- | --- |
+| `createSignInNonce({ provider })` | `create_sign_in_nonce` | `{ nonce, clientId, expiresAt }` |
+| `beginProviderSignIn({ provider, idToken, appClientId })` | `begin_provider_sign_in` | `{ username, ticket }` |
+
+```ts
+const client = createCardeaClient(config, { providerSignIn: adapter });
+
+// Google draws its button in `container`; pressing it opens the popup.
+const result = await client.signInWithGoogle({ mode: "popup", container, signal });
+if (result.status === "signedIn") enter(result.session);
+
+// One Tap, for a page that offers it unasked.
+await client.signInWithGoogle({ mode: "oneTap" });
+```
+
+The result is `signedIn`, `dismissed` (the One Tap prompt was closed or
+skipped) or `redirecting`. The session is saved as any other, refreshes through
+the user pool's API, and signing out of it does not visit the hosted domain.
+
+- **Falling back.** With `fallback`, the page leaves for the hosted sign-in when
+  Google Identity Services cannot be used: no adapter, a blocked script, or a
+  refusal to draw. Popup mode falls back unless told not to; One Tap only when
+  asked, so that a page does not redirect every visitor. Otherwise the call
+  rejects with `provider-unavailable`. Failures of your API never fall back.
+- **A blocked popup cannot be detected.** Google's button reports nothing then.
+  Keep a `signInWithProvider("Google")` button within reach, on desktop most of
+  all.
+- With FedCM, One Tap does not say whether a prompt that did not appear was
+  dismissed or unavailable, so both are `dismissed`.
+- `link-required` means the person must sign in their existing way and link
+  Google from their profile. The adapter's doc comment says how your API's
+  `identityLinkRequired` becomes it.
+- Popup mode waits until the person picks an account, and draws a new button
+  with a new nonce before the old one expires. Abort `signal` to remove it.
+- Google keeps one set of settings per page: run one native sign-in at a time,
+  and none beside a Google linking button.
+- A pool that asks this flow for a second factor ends it with
+  `challenge-unsupported`.
+
+The Content Security Policy must allow `accounts.google.com` and
+`cognito-idp.{region}.amazonaws.com`, and the web origin must be an authorized
+JavaScript origin of the Google client.
+
 ## Sessions
 
 One session record in `localStorage`, keyed by pool issuer and client id, beside
@@ -92,8 +143,8 @@ account's token. If the refresh token no longer works, the session is removed
 
 Changes made by other tabs arrive through the `storage` event.
 
-`signOut()` clears this browser. For a provider session it also visits the
-hosted `/logout`; pass `{ hosted: true }` or `false` to choose. It does not
+`signOut()` clears this browser. For a provider session made on the hosted
+domain it also visits the hosted `/logout`; pass `{ hosted: true }` or `false` to choose. It does not
 sign out other devices.
 
 A provider sign-in is saved only after both tokens verify against the pool's
@@ -218,6 +269,7 @@ Services ID (`appleRedirectUri`, default the origin followed by `/`).
 | `useSignIn()` | The current `step`, `pending`, `error`, and every sign-in, sign-up and recovery action. After confirming a sign-up it signs in with the password already typed, which it holds in memory only |
 | `useSignInMethods()` | `methods`, `hasPassword`, `loading`, `error`, `refresh`, `unlink`, password setup |
 | `useLinkProvider()` | `status`, `error`, `recentSignInRequired`, `prepare`, `confirm`, `link`, `reset` |
+| `useGoogleSignIn()` | `signInWithGoogle`, `pending`, `error`, `cancel`. The view going away, or a new call, ends the attempt |
 
 ## Development
 

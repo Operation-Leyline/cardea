@@ -1,5 +1,12 @@
 export { createCardeaClient } from "./client.js";
-export type { AuthState, ClientOptions, CardeaClient, SignInResult, StartResult } from "./client.js";
+export type {
+  AuthState,
+  CardeaClient,
+  ClientOptions,
+  GoogleSignInResult,
+  SignInResult,
+  StartResult,
+} from "./client.js";
 export type { CardeaConfig, ResolvedConfig } from "./config.js";
 export { authErrorCode, CardeaError } from "./errors.js";
 export type { CardeaErrorCode } from "./errors.js";
@@ -14,6 +21,8 @@ export { googleProofSource } from "./link/google.js";
 export { createLinking } from "./link/linking.js";
 export type { ConfirmOptions, Linking, LinkingOptions, PreparedLink } from "./link/linking.js";
 export type { ProofRequest, ProofSource } from "./link/proof.js";
+export type { ProviderSignInAdapter, SignInNonce } from "./native/adapter.js";
+export type { GoogleSignInOptions } from "./native/google-sign-in.js";
 export type { Provider } from "./providers.js";
 export { safeReturnPath } from "./return-path.js";
 export type { Session, SessionMethod } from "./session/record.js";

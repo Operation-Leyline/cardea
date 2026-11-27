@@ -20,6 +20,13 @@
 //! | `CustomMessage_VerifyUserAttribute` | refuse unless `email_verified` is false |
 //! | `CustomMessage_*`, any other | nothing |
 //! | `CustomEmailSender_*` | refuse the same two; spend the mailbox's budget, decrypt, hand to the product (feature `email-sender`) |
+//! | `DefineAuthChallenge_*` | ask for a [native sign-in](crate::native) ticket once; issue tokens only for its correct answer |
+//! | `CreateAuthChallenge_*` | that one challenge |
+//! | `VerifyAuthChallengeResponse_*` | redeem the ticket for the event's user and app client |
+//!
+//! The last three need the sign-in ticket key: the secret
+//! `SIGN_IN_TICKET_KEY_SECRET` names (feature `native-sign-in`), or the
+//! product's own source ([`TriggerHandler::with_ticket_key_source`]).
 //!
 //! Changing a person's email is not supported. A pool must require
 //! verification before an email update, and route either the custom message or
@@ -40,9 +47,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::{directory::AwsDirectory, email_change};
+use crate::{directory::AwsDirectory, email_change, native::TicketKeySource};
 
 mod account;
+mod custom_auth;
 mod error;
 mod inbound;
 mod pre_signup;
@@ -67,6 +75,31 @@ pub async fn handle(
     // Boxed, so that a product's own crate can lay out the handler's future
     // within the default recursion limit on Rust 1.97.1.
     let answer = Box::pin(dispatch(directory, product, payload));
+    tokio::time::timeout(DEADLINE, answer)
+        .await
+        .map_err(|_| TriggerError::TimedOut)?
+}
+
+/// Answer one custom authentication trigger, the three of a
+/// [native sign-in](crate::native). The result is the event Cognito gets back.
+/// Only the verify trigger reads the directory or asks `keys`.
+pub async fn handle_challenge(
+    directory: &AwsDirectory,
+    keys: &(impl TicketKeySource + ?Sized),
+    payload: Value,
+) -> Result<Value, TriggerError> {
+    let answer = async {
+        let source = payload["triggerSource"].as_str().unwrap_or_default();
+        if source.starts_with("DefineAuthChallenge_") {
+            custom_auth::define(payload)
+        } else if source.starts_with("CreateAuthChallenge_") {
+            custom_auth::create(payload)
+        } else if source.starts_with("VerifyAuthChallenge") {
+            custom_auth::verify(directory, keys, payload).await
+        } else {
+            Err(TriggerError::Unsupported)
+        }
+    };
     tokio::time::timeout(DEADLINE, answer)
         .await
         .map_err(|_| TriggerError::TimedOut)?

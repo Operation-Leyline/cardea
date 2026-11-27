@@ -14,6 +14,8 @@ The AWS side of [Cardea](../../DESIGN.md) sign-in as one CDK construct,
 - Google and Sign in with Apple providers from Secrets Manager;
 - a secretless web client (SRP and authorization code grant; ID and access
   tokens 1 hour, refresh 30 days) and an optional localhost client;
+- if asked, [native provider sign-in](#native-provider-sign-in): the custom
+  authentication triggers and their key;
 - the directory table (`identityKey`, TTL `expiresAt`, on-demand,
   point-in-time recovery, retained);
 - the wiring and IAM of your trigger function, and, for a custom email sender,
@@ -105,6 +107,7 @@ new IdentityPool(this, 'Identity', {
 | `nativeClient` | none | Client for Android and desktop apps; see [Native apps](#native-apps) |
 | `adminPasswordSignIn` | `false` | Allow `AdminInitiateAuth` with a password on the web and dev clients |
 | `google`, `apple` | none | `{ secretName }`; with neither, the pool is password only |
+| `nativeProviderSignIn` | off | `{ clients, ticketKeySecret? }`; see [Native provider sign-in](#native-provider-sign-in) |
 | `domainPrefix` | `{account}-{region}` | Cognito-hosted login prefix |
 | `brandedDomain` | none | `{ domainName, hostedZone, active, certificate? }` |
 | `managedLogin` | `false` | [Managed login](#managed-login) with Cognito's default style, instead of the classic hosted UI |
@@ -112,12 +115,12 @@ new IdentityPool(this, 'Identity', {
 | `logicalIds` | CDK's | Logical ids of resources the stack already has; see [Adopting an existing pool](#adopting-an-existing-pool) |
 | `ssmPrefix` | none | Publishes `user-pool-id`, `web-client-id`, `dev-web-client-id`, `native-client-id`, `login-domain`, `identities-table` |
 | `deletionProtection` | `true` | Pool deletion protection |
-| `removalPolicy` | `RETAIN` | Pool, new directory table, new email key and new mail budget key secret |
+| `removalPolicy` | `RETAIN` | Pool, new directory table, new email key and new key secrets |
 | `email`, `userVerification`, `customAttributes` | CDK's | Passed to the user pool |
 
 The construct exposes `userPool`, `webClient`, `devClient`, `nativeClient`,
 `prefixDomain`, `brandedDomain`, `loginUrl`, `redirectUris`, `directory`,
-`emailKey` and `mailBudgetKey`.
+`emailKey`, `mailBudgetKey` and `signInTicketKey`.
 
 ### Native apps
 
@@ -148,6 +151,49 @@ accept this client id as a token audience beside the web client's. AWS describes
 plain-HTTP loopback URLs as being for testing; they are also what RFC 8252 gives
 desktop apps. `managedLogin: true` is what lets an app ask for a fresh sign-in
 (`prompt=login`).
+
+### Native provider sign-in
+
+Signing in with Google without the browser redirect (DESIGN.md, "Signing in
+with a provider natively"). It is off unless you ask:
+
+```ts
+const identity = new IdentityPool(this, 'Identity', {
+  // …
+  google: { secretName: 'example/auth/google' },
+  nativeProviderSignIn: { clients: ['web', 'native'] },
+});
+identity.grantNativeSignIn(apiFunction);
+// The generated secret's ARN. For one you imported by name, pass its name.
+apiFunction.addEnvironment('SIGN_IN_TICKET_KEY_SECRET', identity.signInTicketKey!.secretArn);
+```
+
+With it, the construct:
+
+- sends `DefineAuthChallenge`, `CreateAuthChallenge` and
+  `VerifyAuthChallengeResponse` to `triggers.handler`;
+- adds `ALLOW_CUSTOM_AUTH` to the clients you name (`web`, `dev`, `native`) and
+  to no other;
+- generates a secret of 64 hexadecimal characters, retained like the table (or
+  takes your `ticketKeySecret`, under the rules of
+  [the mail budget key](#the-mail-budget-key)), grants the handler
+  `GetSecretValue` on it and names it in `SIGN_IN_TICKET_KEY_SECRET`. A handler
+  in another stack or imported needs that variable from you.
+
+Build the trigger function with the `cardea-cognito` feature `native-sign-in`;
+without it every native sign-in is refused. Deploy that code no later than the
+setting.
+
+Your API service runs the two public operations (the nonce, and beginning a
+sign-in). `grantNativeSignIn` grants it `cognito-idp:AdminGetUser`,
+`AdminCreateUser`, `AdminSetUserPassword` and `AdminLinkProviderForUser` on
+this pool, read and write on the directory table, and `GetSecretValue` on the
+key; it takes `policyInPoolStack` as `grantSignInMethods` does. In another stack
+the secret reference makes that stack depend on the pool's. **Rate-limit both
+operations**: anyone can call them, each nonce writes a row, and beginning a
+sign-in can create a user.
+
+Pass the same app client ids to the library as the ones you chose here.
 
 ### Your API service
 
@@ -710,6 +756,17 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   reads them runs: in Pulumi, make the function `dependsOn` the role policy, or
   deploy them first.
 
+**Native provider sign-in** (only if offered)
+
+- `defineAuthChallenge`, `createAuthChallenge` and
+  `verifyAuthChallengeResponse` on the trigger function, with the same invoke
+  permission.
+- One Secrets Manager secret of 64 hexadecimal characters, made as the mail
+  budget key is; its ARN or name in `SIGN_IN_TICKET_KEY_SECRET` on the trigger
+  function and your API service, and `GetSecretValue` on it for both.
+- For the API service, the four Cognito actions of the trigger function on this
+  pool, and read and write on the directory table.
+
 **Directory table**
 
 - Partition key `identityKey` (string), no sort key; on-demand billing; TTL
@@ -737,7 +794,9 @@ and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/l
   `email_verified`, which Cognito refuses in this list. `email` has to stay
   writable because it is required. Run the provider sign-in check under
   [Changing email](#changing-email).
-- Explicit auth flows `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH`.
+- Explicit auth flows `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH`, and
+  `ALLOW_CUSTOM_AUTH` only for [native provider sign-in](#native-provider-sign-in).
+  List the flows: a client that lists none allows the custom one.
 - OAuth flows enabled: `code` only; scopes `openid`, `email`, `profile`.
 - Identity providers `COGNITO`, `Google`, `SignInWithApple`; the client
   depends on both provider resources.

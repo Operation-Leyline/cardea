@@ -1,6 +1,9 @@
 package com.operationleyline.cardea.link
 
-/** What a provider needs to issue an ID token for one linking challenge. */
+/**
+ * What a provider needs to issue an ID token for one linking challenge or one
+ * native sign-in.
+ */
 public class ProofRequest(public val clientId: String, public val nonce: String) {
     override fun toString(): String = "ProofRequest(redacted)"
 }
@@ -11,7 +14,8 @@ public class ProofRequest(public val clientId: String, public val nonce: String)
  *
  * Cancellation of the calling coroutine means the library gave up (the
  * challenge expired or the account changed). Report a person's own refusal as
- * [com.operationleyline.cardea.CardeaErrorCode.ProofCancelled].
+ * [com.operationleyline.cardea.CardeaErrorCode.ProofCancelled]; a sign-in
+ * reports that as [com.operationleyline.cardea.CardeaErrorCode.SignInCancelled].
  *
  * `cardea-kotlin-android` has a source for Google. The app supplies any other.
  */
