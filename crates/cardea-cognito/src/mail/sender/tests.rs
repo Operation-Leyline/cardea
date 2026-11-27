@@ -1,12 +1,15 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
 use aws_sdk_dynamodb::types::AttributeValue as Av;
 
 use super::*;
-use crate::mail::{Counter, DAILY_CAP, RESET_DAILY_CAP};
+use crate::mail::{Counter, DAILY_CAP, RESET_DAILY_CAP, RefreshingKeySource};
 use crate::testing::{
     ddb,
     pending_change::{self, NEW, OBSERVED, OLD, VERIFIED},
@@ -331,6 +334,10 @@ impl Secret {
     fn set(&self, byte: u8) {
         *self.value.lock().unwrap() = Some(byte);
     }
+
+    fn fail(&self) {
+        *self.value.lock().unwrap() = None;
+    }
 }
 
 #[async_trait]
@@ -445,6 +452,107 @@ async fn a_rotated_key_takes_effect_in_a_new_sender_with_fresh_counters() {
             .await,
         Err(MailError::Refused(Refusal::CapReached))
     ));
+}
+
+/// A source given as one is asked for every message, so a running sender takes
+/// up a changed key, and the new key's rows start from nothing.
+#[tokio::test]
+async fn a_given_source_is_asked_for_every_message() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let secret = Secret::holding(1);
+    let sender = EmailSender::with_key_source(ddb, table, secret.clone(), Plain);
+    let outbox = Outbox::default();
+    for n in 0..DAILY_CAP {
+        sender
+            .send_at(&outbox, &event("SignUp", &n.to_string()), "r", NOON)
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        sender
+            .send_at(&outbox, &event("SignUp", "over"), "r", NOON)
+            .await,
+        Err(MailError::Refused(Refusal::CapReached))
+    ));
+    secret.set(2);
+    sender
+        .send_at(&outbox, &event("SignUp", "over"), "r", NOON)
+        .await
+        .unwrap();
+    assert_eq!(
+        secret.reads.load(Ordering::SeqCst),
+        usize::try_from(DAILY_CAP).unwrap() + 2
+    );
+}
+
+/// An interval of nothing reads the secret for every message.
+#[tokio::test]
+async fn a_refresh_takes_up_a_new_key_in_a_running_sender() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let secret = Secret::holding(1);
+    let source = RefreshingKeySource::new(secret.clone(), Duration::ZERO);
+    let sender = EmailSender::with_key_source(ddb.clone(), table.clone(), source, Plain);
+    let outbox = Outbox::default();
+    for byte in [1, 2] {
+        secret.set(byte);
+        sender
+            .send_at(&outbox, &event("SignUp", "1"), "r", NOON)
+            .await
+            .unwrap();
+    }
+    // The same message under two keys: a marker and a counter for each.
+    assert_eq!(rows(&ddb, &table).await.len(), 4);
+}
+
+#[tokio::test]
+async fn a_failed_refresh_sends_with_the_last_key() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let secret = Secret::holding(1);
+    let source = RefreshingKeySource::new(secret.clone(), Duration::ZERO);
+    let sender = EmailSender::with_key_source(ddb.clone(), table.clone(), source, Plain);
+    let outbox = Outbox::default();
+    sender
+        .send_at(&outbox, &event("SignUp", "1"), "r", NOON)
+        .await
+        .unwrap();
+    secret.fail();
+    sender
+        .send_at(&outbox, &event("SignUp", "2"), "r", NOON)
+        .await
+        .unwrap();
+    assert_eq!(secret.reads.load(Ordering::SeqCst), 2);
+    // Both counted on the one key's rows: two markers and the counter.
+    assert_eq!(rows(&ddb, &table).await.len(), 3);
+}
+
+/// A maximum age of nothing lets no key outlive the call that read it.
+#[tokio::test]
+async fn past_the_bound_nothing_is_sent() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let secret = Secret::holding(1);
+    let source =
+        RefreshingKeySource::new(secret.clone(), Duration::ZERO).with_max_age(Duration::ZERO);
+    let sender = EmailSender::with_key_source(ddb.clone(), table.clone(), source, Plain);
+    let outbox = Outbox::default();
+    sender
+        .send(&outbox, &event("SignUp", "1"), "r")
+        .await
+        .unwrap();
+    secret.fail();
+    let error = sender
+        .send(&outbox, &event("SignUp", "2"), "r")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, MailError::BudgetKey(KeyError::Read(_))),
+        "{error:?}"
+    );
+    assert_eq!(outbox.sent.lock().unwrap().len(), 1);
+    assert_eq!(rows(&ddb, &table).await.len(), 2);
 }
 
 #[test]

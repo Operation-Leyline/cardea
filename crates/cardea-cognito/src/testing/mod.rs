@@ -9,6 +9,8 @@ pub(crate) mod loopback;
 pub(crate) mod pending_change;
 pub(crate) mod product;
 pub(crate) mod provider;
+#[cfg(feature = "email-sender")]
+pub(crate) mod sender;
 
 use aws_sdk_dynamodb::types::AttributeValue;
 

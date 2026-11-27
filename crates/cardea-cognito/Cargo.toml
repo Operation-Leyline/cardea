@@ -44,5 +44,5 @@ cardea-cognito = { path = ".", features = ["email-sender"] }
 aws-lc-rs = "1"
 axum = "0.8"
 dynoxide-rs = { git = "https://github.com/Operation-Leyline/dynoxide", rev = "179e591fac34e362f0fbe40cbacc03f43f162a46", version = "=3.3.0", default-features = false, features = ["native-sqlite", "http-server"] }
-tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "test-util"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
