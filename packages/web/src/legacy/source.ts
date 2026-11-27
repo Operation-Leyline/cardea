@@ -42,18 +42,18 @@ export interface TokenFields {
   readonly subject: string;
 }
 
-/** The names the hosted token endpoint uses, with the signed-in `subject`. */
-const TOKEN_FIELDS: TokenFields = {
-  idToken: "id_token",
-  accessToken: "access_token",
-  refreshToken: "refresh_token",
-  subject: "subject",
-};
-
-/** Reads one JSON token record. All four values must be there. */
+/**
+ * Reads one JSON token record. All four values must be there. A name not given
+ * is the hosted token endpoint's, and `subject` for the signed-in subject.
+ */
 export function readTokenJson(raw: string | null, fields: Partial<TokenFields> = {}): Omit<LegacySession, "method"> | null {
   if (!raw) return null;
-  const names = { ...TOKEN_FIELDS, ...fields };
+  const names: TokenFields = {
+    idToken: fields.idToken ?? "id_token",
+    accessToken: fields.accessToken ?? "access_token",
+    refreshToken: fields.refreshToken ?? "refresh_token",
+    subject: fields.subject ?? "subject",
+  };
   try {
     const value = (JSON.parse(raw) ?? {}) as Record<string, unknown>;
     const [idToken, accessToken, refreshToken, subject] = [

@@ -132,7 +132,10 @@ and `subject`, all non-empty strings. `providerSession` takes:
 | `fields` | Other property names, for any of `idToken`, `accessToken`, `refreshToken` and `subject` |
 | `provider` | `"Google"` (the default) or `"Apple"` |
 
-The key is removed once the session is taken over, and on sign-in and sign-out.
+The key is removed once the session is taken over, and on sign-in and sign-out,
+whichever client wrote it. Put `{clientId}` and `{issuer}` in the key if the old
+code did, so that one client of an origin never removes another's session. A key
+that is also this package's own session key keeps the new session.
 
 They are read once per page load, in order, only when there is no session of
 this package's own: by `start`, or by a token getter called before it. Getters

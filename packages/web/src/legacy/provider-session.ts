@@ -1,4 +1,5 @@
 import type { Provider } from "../providers.js";
+import { parseRecord } from "../session/record.js";
 import { readTokenJson, type LegacyClient, type LegacySessionSource, type TokenFields } from "./source.js";
 
 /** Where an app's earlier code kept the tokens of a provider sign-in. */
@@ -27,7 +28,9 @@ export function providerSession({ key, fields, provider = "Google" }: ProviderSe
       return tokens ? { method: provider, ...tokens } : null;
     },
     clear(storage, client) {
-      storage.removeItem(keyFor(client));
+      const key = keyFor(client);
+      // The old code may have used the key this package now saves its session under.
+      if (!parseRecord(storage.getItem(key))) storage.removeItem(key);
     },
   };
 }

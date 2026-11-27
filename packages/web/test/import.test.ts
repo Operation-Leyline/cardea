@@ -333,11 +333,39 @@ describe("a configured provider session", () => {
     expect(keys()).toEqual([SESSION_KEY]);
   });
 
+  it("refreshes an expired Apple session at the token endpoint and keeps its provider", async () => {
+    const cognito = installFakeCognito();
+    const old = await saveHosted(GOOGLE, EXPIRED);
+    const { client } = setup([providerSession({ key: GOOGLE_PATTERN, provider: "Apple" })]);
+    await client.start();
+    expect(cognito.tokenRequests).toHaveLength(1);
+    expect(saved().idToken).not.toBe(old.id_token);
+    expect(saved()).toMatchObject({ method: "Apple", refreshToken: "refresh-ada" });
+    expect(keys()).toEqual([SESSION_KEY]);
+  });
+
+  it("keeps the new session when the old code used this package's session key", async () => {
+    installFakeCognito();
+    const storagePrefix = "example-app.auth.";
+    const key = `${storagePrefix}session.${ISSUER}.${CONFIG.clientId}`;
+    const old = await saveHosted(key);
+    const source = providerSession({ key: `${storagePrefix}session.{issuer}.{clientId}` });
+    const first = setup([source], {}, { storagePrefix });
+    await first.client.start();
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({ version: 1, idToken: old.id_token });
+
+    const next = setup([source], {}, { storagePrefix });
+    await next.client.start();
+    expect(next.client.getState().status).toBe("signedIn");
+    next.client.signOut({ hosted: false });
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
   it("keeps the default names of the properties it is not given", async () => {
     installFakeCognito();
     const { id_token, ...rest } = await issueTokens();
     localStorage.setItem(GOOGLE, JSON.stringify({ ...rest, jwt: id_token, subject: "ada" }));
-    const { client } = setup([providerSession({ key: GOOGLE_PATTERN, fields: { idToken: "jwt" } })]);
+    const { client } = setup([providerSession({ key: GOOGLE_PATTERN, fields: { idToken: "jwt", accessToken: undefined } })]);
     await client.start();
     expect(client.getState().session).toMatchObject({ subject: "ada", method: "Google" });
   });
