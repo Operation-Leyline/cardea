@@ -5,26 +5,57 @@ use std::sync::Arc;
 use lambda_runtime::{LambdaEvent, service_fn};
 use serde_json::Value;
 
-use super::{EmailSender, KmsDecryptor, MailDelivery, MailError};
+use super::{EmailSender, KmsDecryptor, MailDelivery, MailError, SecretsManagerKey};
 
 /// The environment variable naming the budget's table.
 const TABLE_VARIABLE: &str = "MAIL_BUDGET_TABLE";
+/// The environment variable naming the secret that holds the budget's key.
+const SECRET_VARIABLE: &str = "MAIL_BUDGET_KEY_SECRET";
 /// The environment variable naming the custom sender's KMS key.
 const KEY_VARIABLE: &str = "COGNITO_EMAIL_KEY_ARN";
 
+/// What the environment says about the sender.
+#[derive(Debug, PartialEq, Eq)]
+struct Settings {
+    table: String,
+    budget_key_secret: String,
+    email_key: String,
+}
+
+impl Settings {
+    /// The settings `variable` answers with. Each is required: an unset or
+    /// empty one is refused by name.
+    fn read(variable: impl Fn(&str) -> Option<String>) -> Result<Self, MailError> {
+        let required = |name: &'static str| {
+            variable(name)
+                .filter(|value| !value.is_empty())
+                .ok_or(MailError::Configuration(name))
+        };
+        Ok(Self {
+            table: required(TABLE_VARIABLE)?,
+            budget_key_secret: required(SECRET_VARIABLE)?,
+            email_key: required(KEY_VARIABLE)?,
+        })
+    }
+}
+
 impl EmailSender {
-    /// A sender from `MAIL_BUDGET_TABLE` and `COGNITO_EMAIL_KEY_ARN`, in the
-    /// function's own region.
+    /// A sender from `MAIL_BUDGET_TABLE`, `MAIL_BUDGET_KEY_SECRET` and
+    /// `COGNITO_EMAIL_KEY_ARN`, in the function's own region. The secret is
+    /// read when the first message arrives.
     pub async fn from_env() -> Result<Self, MailError> {
-        let table =
-            std::env::var(TABLE_VARIABLE).map_err(|_| MailError::Configuration(TABLE_VARIABLE))?;
-        let key =
-            std::env::var(KEY_VARIABLE).map_err(|_| MailError::Configuration(KEY_VARIABLE))?;
+        let settings = Settings::read(|name| std::env::var(name).ok())?;
         let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-        let decryptor = KmsDecryptor::new(aws_sdk_kms::Client::new(&config), key).await?;
+        let decryptor =
+            KmsDecryptor::new(aws_sdk_kms::Client::new(&config), settings.email_key).await?;
+        let key = SecretsManagerKey::new(
+            aws_sdk_secretsmanager::Client::new(&config),
+            settings.budget_key_secret,
+        );
         Ok(Self::new(
             aws_sdk_dynamodb::Client::new(&config),
-            table,
+            settings.table,
+            key,
             decryptor,
         ))
     }
@@ -53,3 +84,6 @@ pub fn run(delivery: impl MailDelivery) -> Result<(), lambda_runtime::Error> {
         .build()?
         .block_on(serve(delivery))
 }
+
+#[cfg(test)]
+mod tests;

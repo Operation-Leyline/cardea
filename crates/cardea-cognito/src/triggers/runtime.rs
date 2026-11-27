@@ -17,6 +17,10 @@ type Failure = lambda_runtime::Error;
 pub struct TriggerHandler<P> {
     product: P,
     config: SdkConfig,
+    /// Built for the first mail event and kept, so that the budget key is read
+    /// once.
+    #[cfg(feature = "email-sender")]
+    sender: tokio::sync::OnceCell<crate::mail::EmailSender>,
 }
 
 impl<P: Product> TriggerHandler<P> {
@@ -25,6 +29,8 @@ impl<P: Product> TriggerHandler<P> {
         Self {
             product,
             config: config::load().await,
+            #[cfg(feature = "email-sender")]
+            sender: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -56,7 +62,10 @@ impl<P: Product> TriggerHandler<P> {
             .ok_or("the product delivers no Cognito mail")?;
         // Reading the environment here keeps it unneeded in a function that
         // never receives mail events.
-        let sender = crate::mail::EmailSender::from_env().await?;
+        let sender = self
+            .sender
+            .get_or_try_init(crate::mail::EmailSender::from_env)
+            .await?;
         Ok(sender.send(delivery, payload, request_id).await?)
     }
 
@@ -88,3 +97,6 @@ pub fn run<P: Product>(product: P) -> Result<(), Failure> {
         .build()?
         .block_on(serve(product))
 }
+
+#[cfg(all(test, feature = "email-sender"))]
+mod tests;

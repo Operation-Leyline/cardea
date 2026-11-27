@@ -16,3 +16,5 @@ Apple.
   desktop JVM apps.
 
 Read [DESIGN.md](DESIGN.md) first.
+
+Licensed under the [Apache License 2.0](LICENSE).

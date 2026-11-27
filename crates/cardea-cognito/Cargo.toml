@@ -8,9 +8,10 @@ publish.workspace = true
 
 [features]
 default = []
-# Decrypts Cognito's custom email sender codes with the AWS Encryption SDK.
-# Off by default: only a function that sends mail needs to compile the SDK.
-email-sender = ["dep:aws-esdk", "dep:aws-sdk-kms"]
+# What a function that sends mail needs: decrypting Cognito's custom email
+# sender codes with the AWS Encryption SDK, and reading the mail budget's key
+# from Secrets Manager. Off by default: other users need compile neither SDK.
+email-sender = ["dep:aws-esdk", "dep:aws-sdk-kms", "dep:aws-sdk-secretsmanager"]
 
 [dependencies]
 cardea-core.workspace = true
@@ -28,12 +29,14 @@ lambda_runtime = "1.4"
 tracing = "0.1"
 base64 = "0.22"
 hex = "0.4"
+hmac = "0.13"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-sha2 = "0.10"
+sha2 = "0.11"
 uuid = { version = "1", features = ["v4"] }
 aws-esdk = { version = "=1.2.4", optional = true }
 aws-sdk-kms = { version = "1.114.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-sdk-secretsmanager = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 
 [dev-dependencies]
 # Tests build the decryptor too, so one `cargo test --workspace` covers it.

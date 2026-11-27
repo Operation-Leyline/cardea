@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use aws_sdk_dynamodb::types::AttributeValue as Av;
 
 use super::*;
@@ -20,11 +25,16 @@ impl CodeDecryptor for Plain {
     }
 }
 
+/// A budget key whose bytes are all `byte`.
+fn budget_key_of(byte: u8) -> BudgetKey {
+    BudgetKey::from_secret(&hex::encode([byte; 32])).unwrap()
+}
+
 async fn sender() -> (EmailSender, Dynamo, String) {
     let client = ddb::client();
     let table = ddb::table(&client, "partitionKey", Some("sortKey")).await;
     (
-        EmailSender::new(client.clone(), table.clone(), Plain),
+        EmailSender::new(client.clone(), table.clone(), budget_key_of(1), Plain),
         client,
         table,
     )
@@ -117,7 +127,8 @@ fn retries_reuse_the_key_but_new_codes_and_payloads_do_not() {
     );
 }
 
-/// The key's spelling is what delivery markers already in a table hash.
+/// The product's mail provider knows a message by this key, so a release must
+/// not spell it anew.
 #[test]
 fn the_delivery_key_keeps_its_spelling() {
     let event = json!({"request":{"code":"c"}});
@@ -295,6 +306,138 @@ async fn a_missing_template_or_a_bad_event_spends_nothing() {
         Err(MailError::UnsupportedSource)
     ));
     assert!(rows(&ddb, &table).await.is_empty());
+}
+
+/// A secret that answers each read with what a test put there, and counts the
+/// reads. `None` is a secret that cannot be read.
+#[derive(Clone, Default)]
+struct Secret {
+    value: Arc<std::sync::Mutex<Option<u8>>>,
+    reads: Arc<AtomicUsize>,
+}
+
+impl Secret {
+    fn holding(byte: u8) -> Self {
+        let secret = Self::default();
+        secret.set(byte);
+        secret
+    }
+
+    fn set(&self, byte: u8) {
+        *self.value.lock().unwrap() = Some(byte);
+    }
+}
+
+#[async_trait]
+impl BudgetKeySource for Secret {
+    async fn load(&self) -> Result<BudgetKey, KeyError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        let byte = *self.value.lock().unwrap();
+        byte.map(budget_key_of)
+            .ok_or_else(|| KeyError::Read("secret not found".into()))
+    }
+}
+
+/// A decryptor that must not be reached.
+struct Untouched;
+
+#[async_trait]
+impl CodeDecryptor for Untouched {
+    async fn decrypt(&self, _: Vec<u8>, _: &str) -> Result<String, MailError> {
+        panic!("decrypted a code without a budget key")
+    }
+}
+
+/// Every message is refused, the uncounted ones too, with nothing decrypted,
+/// counted or delivered.
+#[tokio::test]
+async fn without_a_budget_key_nothing_is_sent() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let sender = EmailSender::new(ddb.clone(), table.clone(), Secret::default(), Untouched);
+    let outbox = Outbox::default();
+    for source in [
+        "SignUp",
+        "ResendCode",
+        "ForgotPassword",
+        "Authentication",
+        "AdminCreateUser",
+        "AccountTakeOverNotification",
+    ] {
+        let error = sender
+            .send(&outbox, &event(source, "1"), "r")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, MailError::BudgetKey(KeyError::Read(_))),
+            "{source}: {error:?}"
+        );
+        assert_eq!(error.to_string(), Refusal::Unavailable.to_string());
+    }
+    assert!(outbox.sent.lock().unwrap().is_empty());
+    assert!(rows(&ddb, &table).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_key_is_read_again_after_a_failure_and_once_after_a_success() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let secret = Secret::default();
+    let sender = EmailSender::new(ddb, table, secret.clone(), Plain);
+    let outbox = Outbox::default();
+    assert!(
+        sender
+            .send(&outbox, &event("SignUp", "1"), "r")
+            .await
+            .is_err()
+    );
+    secret.set(1);
+    for code in ["1", "2", "3"] {
+        sender
+            .send(&outbox, &event("SignUp", code), "r")
+            .await
+            .unwrap();
+    }
+    assert_eq!(outbox.sent.lock().unwrap().len(), 3);
+    assert_eq!(secret.reads.load(Ordering::SeqCst), 2);
+}
+
+/// Rotating the secret resets the day's counters, one function instance at a
+/// time: a running one keeps the key it read, and one started afterwards counts
+/// from nothing.
+#[tokio::test]
+async fn a_rotated_key_takes_effect_in_a_new_sender_with_fresh_counters() {
+    let ddb = ddb::client();
+    let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
+    let secret = Secret::holding(1);
+    let running = EmailSender::new(ddb.clone(), table.clone(), secret.clone(), Plain);
+    let outbox = Outbox::default();
+    for n in 0..DAILY_CAP {
+        running
+            .send(&outbox, &event("SignUp", &n.to_string()), "r")
+            .await
+            .unwrap();
+    }
+
+    secret.set(2);
+    assert!(matches!(
+        running.send(&outbox, &event("SignUp", "over"), "r").await,
+        Err(MailError::Refused(Refusal::CapReached))
+    ));
+
+    let started = EmailSender::new(ddb, table, secret, Plain);
+    for n in 0..DAILY_CAP {
+        started
+            .send(&outbox, &event("SignUp", &format!("new{n}")), "r")
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        started
+            .send(&outbox, &event("SignUp", "new-over"), "r")
+            .await,
+        Err(MailError::Refused(Refusal::CapReached))
+    ));
 }
 
 #[test]
