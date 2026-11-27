@@ -38,8 +38,7 @@ class LoopbackTest {
     @Test
     fun `accepts only the expected request, once`() = runBlocking {
         LoopbackServer.open("/callback").use { server ->
-            val port = URI(server.redirectUri).port
-            assertEquals("http://127.0.0.1:$port/callback", server.redirectUri)
+            val port = server.port
             server.listen("done") { it["state"] == listOf("expected") }
             val answer = async(Dispatchers.Default) { server.await(10.seconds) }
             withContext(Dispatchers.IO) {
@@ -70,7 +69,7 @@ class LoopbackTest {
     @Test
     fun `gives up after the timeout and frees the port`() = runBlocking {
         val server = LoopbackServer.open("/callback")
-        val port = URI(server.redirectUri).port
+        val port = server.port
         server.use {
             it.listen("done") { true }
             assertNull(it.await(100.milliseconds))
@@ -82,7 +81,7 @@ class LoopbackTest {
     fun `reports a port that is taken`() {
         LoopbackServer.open("/callback").use { first ->
             assertFails(CardeaErrorCode.LoopbackUnavailable) {
-                LoopbackServer.open("/callback", URI(first.redirectUri).port)
+                LoopbackServer.open("/callback", first.port)
             }
         }
     }
@@ -118,6 +117,29 @@ class DesktopSignInTest {
             val sent = pool.tokenRequests.single()
             assertEquals("real", sent["code"])
             assertTrue(sent.getValue("redirect_uri").matches(Regex("http://127\\.0\\.0\\.1:\\d+/callback")))
+        }
+    }
+
+    @Test
+    fun `keeps a configured query, and a redirect without a path, as written`() = runBlocking {
+        for ((configured, sent) in listOf(
+            "http://127.0.0.1/callback?app=desktop" to "http://127\\.0\\.0\\.1:\\d+/callback\\?app=desktop",
+            "http://127.0.0.1" to "http://127\\.0\\.0\\.1:\\d+",
+        )) {
+            FakePool(config = testConfig(redirectUri = configured)).use { pool ->
+                val browser = BrowserOpener { url ->
+                    val query = decodeQuery(URI(url).rawQuery)!!.mapValues { it.value.single() }
+                    pool.mint.nonce = query["nonce"]
+                    val back = URI(query.getValue("redirect_uri"))
+                    val kept = back.rawQuery?.let { "$it&" }.orEmpty()
+                    val path = back.rawPath.ifEmpty { "/" }
+                    withContext(Dispatchers.IO) {
+                        get(back.port, "$path?${kept}code=real&state=${query.getValue("state")}")
+                    }
+                }
+                DesktopSignIn(pool.client(), browser).signIn()
+                assertTrue(pool.tokenRequests.single().getValue("redirect_uri").matches(Regex(sent)))
+            }
         }
     }
 

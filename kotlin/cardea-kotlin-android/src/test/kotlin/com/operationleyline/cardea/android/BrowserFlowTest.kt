@@ -19,7 +19,10 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 
-private const val AUTHORIZE = "https://login.example.com/oauth2/authorize?state=s"
+private const val AUTHORIZE = "https://login.example.com/oauth2/authorize" +
+    "?redirect_uri=com.example.app%3A%2F%2Fauth%2Fcallback&state=s"
+private const val SIGN_OUT = "https://login.example.com/logout" +
+    "?logout_uri=com.example.app%3A%2F%2Fauth%2Fsigned-out"
 private const val REDIRECT = "com.example.app://auth/callback?code=c&state=s"
 
 @RunWith(RobolectricTestRunner::class)
@@ -94,23 +97,59 @@ class BrowserFlowTest {
         assertEquals(REDIRECT, (outcome(again.get()) as BrowserResult.Redirect).redirect)
     }
 
-    @Test
-    fun `the redirect activity hands the address to the waiting screen`() {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(REDIRECT))
+    /** Sends [address] to the redirect activity and returns what it passed on. */
+    private fun receive(address: String?): Intent? {
+        val intent = Intent(Intent.ACTION_VIEW, address?.let(Uri::parse))
         val receiver = Robolectric.buildActivity(CardeaRedirectActivity::class.java, intent).create()
-        val forwarded = shadowOf(receiver.get()).nextStartedActivity
+        assertTrue(receiver.get().isFinishing)
+        return shadowOf(receiver.get()).nextStartedActivity
+    }
+
+    /** A waiting screen whose own browser tab has been taken off the queue. */
+    private fun waiting(url: String = AUTHORIZE): ActivityController<CardeaBrowserActivity> =
+        launch(url).also { shadowOf(it.get()).nextStartedActivity }
+
+    @Test
+    fun `the redirect activity hands the awaited address to the waiting screen`() {
+        waiting()
+        val forwarded = receive(REDIRECT)!!
         assertEquals(CardeaBrowserActivity::class.java.name, forwarded.component!!.className)
         assertEquals(REDIRECT, forwarded.dataString)
         val flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         assertEquals(flags, forwarded.flags and flags)
-        assertTrue(receiver.get().isFinishing)
     }
 
     @Test
-    fun `the redirect activity ignores an intent without an address`() {
-        val receiver = Robolectric.buildActivity(CardeaRedirectActivity::class.java).create()
-        assertNull(shadowOf(receiver.get()).nextStartedActivity)
-        assertTrue(receiver.get().isFinishing)
+    fun `the redirect activity ignores what another app could send`() {
+        waiting()
+        val forged = listOf(
+            null,
+            "com.example.app://auth/callback?code=x",
+            "com.example.app://auth/callback?code=x&state=wrong",
+            "com.example.app://auth/callback?code=x&state=s&state=s",
+            "com.example.app://auth/other?code=x&state=s",
+            "com.example.app://elsewhere/callback?code=x&state=s",
+            "com.example.app://auth/signed-out",
+            "com.example.app:opaque",
+        )
+        for (address in forged) assertNull(address, receive(address))
+        // The sign-in is still awaited.
+        assertEquals(REDIRECT, receive(REDIRECT)!!.dataString)
+    }
+
+    @Test
+    fun `the redirect activity ignores everything when no tab is open`() {
+        assertNull(receive(REDIRECT))
+        val screen = waiting()
+        screen.pause().resume()
+        assertNull(receive(REDIRECT))
+    }
+
+    @Test
+    fun `awaits a sign-out at its own address`() {
+        waiting(SIGN_OUT)
+        assertNull(receive(REDIRECT))
+        assertEquals("com.example.app://auth/signed-out", receive("com.example.app://auth/signed-out")!!.dataString)
     }
 
     @Test

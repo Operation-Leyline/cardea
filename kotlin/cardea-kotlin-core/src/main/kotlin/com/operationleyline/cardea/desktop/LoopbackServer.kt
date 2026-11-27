@@ -23,6 +23,7 @@ private const val MAX_HEAD_BYTES = 16 * 1024
 private const val REQUEST_DEADLINE_MS = 10_000L
 private const val MAX_CONNECTIONS = 32
 private const val ACCEPT_RETRY_MS = 50L
+private const val CLOSE_WAIT_MS = 1_000L
 
 /**
  * A one-shot HTTP listener on `127.0.0.1` for the browser's way back. It accepts
@@ -33,21 +34,27 @@ internal class LoopbackServer private constructor(
     private val server: ServerSocket,
     private val path: String,
 ) : Closeable {
-    private val authority = "127.0.0.1:${server.localPort}"
+    val port: Int = server.localPort
+    private val authority = "127.0.0.1:$port"
 
-    /** The address of [path] on the port this listener holds. */
-    val redirectUri: String = "http://$authority$path"
+    /**
+     * [configured] with this listener's port, otherwise exactly as written: the
+     * hosted sign-in compares the rest with what the app client registers.
+     */
+    fun addressOf(configured: URI): String =
+        "http://$authority${configured.rawPath.orEmpty()}" + configured.rawQuery?.let { "?$it" }.orEmpty()
 
     private val answer = CompletableDeferred<String>()
     private val claimed = AtomicBoolean()
     private val connections: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
+    @Volatile private var acceptor: Thread? = null
 
     /**
      * Starts answering. The first request that [accepts] takes is sent [page].
      * Call once, before the browser is opened.
      */
     fun listen(page: String, accepts: (Map<String, List<String>>) -> Boolean) {
-        thread(isDaemon = true, name = "cardea-loopback") {
+        acceptor = thread(isDaemon = true, name = "cardea-loopback") {
             while (!server.isClosed) {
                 val socket = try {
                     server.accept()
@@ -80,6 +87,8 @@ internal class LoopbackServer private constructor(
 
     override fun close() {
         runCatching { server.close() }
+        // The port is let go only once the thread waiting on it has woken.
+        acceptor?.join(CLOSE_WAIT_MS)
         for (socket in connections) runCatching { socket.close() }
     }
 

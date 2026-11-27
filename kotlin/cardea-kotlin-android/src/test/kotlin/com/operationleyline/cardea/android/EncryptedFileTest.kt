@@ -1,6 +1,7 @@
 package com.operationleyline.cardea.android
 
 import java.io.File
+import java.io.IOException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import kotlinx.coroutines.runBlocking
@@ -57,6 +58,15 @@ class EncryptedFileTest {
             file().writeBytes(junk)
             assertNull(EncryptedFile(file()) { key }.read())
         }
+    }
+
+    @Test
+    fun `reports a replacement that fails, and keeps the old string`() = runBlocking {
+        EncryptedFile(file()) { key }.write(secret)
+        val stuck = EncryptedFile(file(), replace = { _, _ -> throw IOException("rename failed") }) { key }
+        assertTrue(runCatching { stuck.write("second") }.exceptionOrNull() is IOException)
+        assertEquals(secret, stuck.read())
+        assertEquals(listOf("session"), folder.root.list()!!.toList())
     }
 
     @Test

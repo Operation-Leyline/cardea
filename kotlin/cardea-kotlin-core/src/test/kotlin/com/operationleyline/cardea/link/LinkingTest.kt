@@ -6,6 +6,7 @@ import com.operationleyline.cardea.FakePool
 import com.operationleyline.cardea.Provider
 import com.operationleyline.cardea.RecentSignInRequiredException
 import com.operationleyline.cardea.assertFails
+import com.operationleyline.cardea.testConfig
 import java.time.Duration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -195,6 +196,20 @@ class LinkingTest {
         api.userId = "someone-else"
         assertFails(CardeaErrorCode.AccountMismatch) { linking.linkProvider(Provider.Google) }
         assertEquals(0, changes)
+    }
+
+    @Test
+    fun `takes either of the account's ids when the product has its own claim`() = runBlocking {
+        val custom = pool.client(config = testConfig(userIdClaim = "custom:userId"))
+        pool.mint.idClaims = mapOf("custom:userId" to "customer-9")
+        pool.signIn(custom)
+        val theirs = CardeaLinking(custom, api, mapOf(Provider.Google to google))
+        for (id in listOf("customer-9", "user-1")) {
+            api.userId = id
+            assertEquals(id, theirs.linkProvider(Provider.Google))
+        }
+        api.userId = "customer-10"
+        assertFails(CardeaErrorCode.AccountMismatch) { theirs.linkProvider(Provider.Google) }
     }
 
     @Test

@@ -24,6 +24,7 @@ public class CardeaBrowserActivity : Activity() {
         // A redirect creating this screen means the one that was waiting is gone.
         val orphan = intent.dataString
         if (savedInstanceState == null && orphan != null) {
+            AwaitedRedirect.read(this)?.forget(this)
             packageManager.getLaunchIntentForPackage(packageName)?.let {
                 // An app screen that is still there gets the redirect in onNewIntent.
                 it.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -58,6 +59,7 @@ public class CardeaBrowserActivity : Activity() {
         val address = url?.let(Uri::parse)?.takeIf { it.scheme == "https" }
             ?: return finishWith(RESULT_CANCELED)
         launched = true
+        AwaitedRedirect.of(address)?.save(this)
         try {
             CustomTabsIntent.Builder().build().launchUrl(this, address)
         } catch (_: ActivityNotFoundException) {
@@ -66,6 +68,7 @@ public class CardeaBrowserActivity : Activity() {
     }
 
     private fun finishWith(result: Int, data: Intent? = null) {
+        intent.getStringExtra(EXTRA_URL)?.let { AwaitedRedirect.of(Uri.parse(it))?.forget(this) }
         setResult(result, data)
         finish()
     }

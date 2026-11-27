@@ -27,6 +27,10 @@ public data class IdentityLinkChallenge(
     override fun toString(): String = "IdentityLinkChallenge(redacted)"
 }
 
+/**
+ * @property userId the account that was linked: the token's subject (what Cardea
+ *   itself returns) or the value of the claim `CardeaConfig.userIdClaim` names.
+ */
 public data class CompletedIdentityLink(val userId: String)
 
 /**

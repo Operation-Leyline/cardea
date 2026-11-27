@@ -94,7 +94,10 @@ public class CardeaLinking(
             throw if (asksForRecentSignIn(error)) RecentSignInRequiredException() else error
         }
         requireSameAccount(session)
-        if (completed.userId != session.userId) throw CardeaException(CardeaErrorCode.AccountMismatch)
+        // Cardea's own `userId` is the subject; a product may answer with the id its claim names.
+        if (completed.userId != session.userId && completed.userId != session.subject) {
+            throw CardeaException(CardeaErrorCode.AccountMismatch)
+        }
         changed()
         return completed.userId
     }

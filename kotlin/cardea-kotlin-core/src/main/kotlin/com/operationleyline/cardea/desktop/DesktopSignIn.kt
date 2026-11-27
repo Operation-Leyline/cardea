@@ -41,7 +41,7 @@ public class DesktopSignIn(
         val configured = loopback(client.config.redirectUri)
             ?: throw CardeaException(CardeaErrorCode.NotConfigured)
         return LoopbackServer.open(configured.rawPath).use { server ->
-            val request = client.startSignIn(provider, reauthenticate, server.redirectUri)
+            val request = client.startSignIn(provider, reauthenticate, server.addressOf(configured))
             var answered = false
             try {
                 server.listen(closingPage("Sign-in finished.")) { query ->

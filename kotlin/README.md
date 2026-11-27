@@ -142,6 +142,14 @@ of the callback path with the pending state and refuses everything else. To give
 up, cancel the coroutine; do that before starting another sign-in. Pass your own
 `BrowserOpener` if the app needs another way to open a browser.
 
+The authorization address is handed to the system's opener as a command-line
+argument, as desktop browsers are started, so other users of the same machine may
+be able to read it in the process list. It holds no secret that opens a session,
+but someone who reads it during a sign-in could sign in with their own account
+and deliver that answer first, leaving the person signed in as them. On a shared
+machine, hide other users' processes (Linux `hidepid`) or pass a `BrowserOpener`
+that does not use arguments.
+
 `signOut` suspends until the browser reaches the sign-out URL, up to a minute.
 Run it where the app does not wait on it.
 
@@ -218,22 +226,27 @@ val client = CardeaClient(
 )
 
 class SignInActivity : ComponentActivity() {
-    private val browser = registerForActivityResult(CardeaBrowserContract()) { result ->
+    private val signInTab = registerForActivityResult(CardeaBrowserContract()) { result ->
         lifecycleScope.launch { client.completeSignIn(result) }   // handle CardeaException
     }
+    // Its own launcher: the way back from signing out is not a sign-in.
+    private val signOutTab = registerForActivityResult(CardeaBrowserContract()) { }
 
     fun signIn(provider: Provider?) = lifecycleScope.launch {
-        browser.launch(client.startSignIn(provider).url)
+        signInTab.launch(client.startSignIn(provider).url)
     }
 
     fun signOut() = lifecycleScope.launch {
-        client.signOut()?.let(browser::launch)    // ignore the result
+        client.signOut()?.let(signOutTab::launch)
     }
 }
 ```
 
-Give the `signOut` launch its own `registerForActivityResult` that ignores the
-result, so that its redirect is not passed to `completeSignIn`.
+`CardeaRedirectActivity` passes on only the address the open tab is awaited at,
+with the pending sign-in's `state`, so another app cannot end a sign-in by
+sending one. A sign-out answer has no `state`: another app that sends your
+sign-out address while the sign-out tab is open can close that tab early. The
+app is already signed out by then, but the hosted session may not be.
 
 In the launcher activity's `onCreate` and `onNewIntent`, also finish a sign-in
 whose waiting screen Android had removed:
