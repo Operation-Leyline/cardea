@@ -87,20 +87,52 @@ new IdentityPool(this, 'Identity', {
 | `triggers.customEmailSender` | none | `{ handler?, key? }`; the handler defaults to the trigger function, the key to a new one. See [A separate email sender](#a-separate-email-sender) |
 | `webClient` | required | `callbackUrls`, `logoutUrls` of the production app |
 | `devClient` | none | Second client; `http://localhost` or `http://127.0.0.1` URLs only |
-| `adminPasswordSignIn` | `false` | Allow `AdminInitiateAuth` with a password on both clients |
+| `nativeClient` | none | Client for Android and desktop apps; see [Native apps](#native-apps) |
+| `adminPasswordSignIn` | `false` | Allow `AdminInitiateAuth` with a password on the web and dev clients |
 | `google`, `apple` | none | `{ secretName }`; with neither, the pool is password only |
 | `domainPrefix` | `{account}-{region}` | Cognito-hosted login prefix |
 | `brandedDomain` | none | `{ domainName, hostedZone, active, certificate? }` |
 | `managedLogin` | `false` | [Managed login](#managed-login) with Cognito's default style, instead of the classic hosted UI |
 | `directory` | new table | `{ tableName?, replicaRegions? }`, or `{ table }` to use an existing one |
 | `logicalIds` | CDK's | Logical ids of resources the stack already has; see [Adopting an existing pool](#adopting-an-existing-pool) |
-| `ssmPrefix` | none | Publishes `user-pool-id`, `web-client-id`, `dev-web-client-id`, `login-domain`, `identities-table` |
+| `ssmPrefix` | none | Publishes `user-pool-id`, `web-client-id`, `dev-web-client-id`, `native-client-id`, `login-domain`, `identities-table` |
 | `deletionProtection` | `true` | Pool deletion protection |
 | `removalPolicy` | `RETAIN` | Pool, new directory table and new email key |
 | `email`, `userVerification`, `customAttributes` | CDK's | Passed to the user pool |
 
-The construct exposes `userPool`, `webClient`, `devClient`, `prefixDomain`,
-`brandedDomain`, `loginUrl`, `redirectUris`, `directory` and `emailKey`.
+The construct exposes `userPool`, `webClient`, `devClient`, `nativeClient`,
+`prefixDomain`, `brandedDomain`, `loginUrl`, `redirectUris`, `directory` and
+`emailKey`.
+
+### Native apps
+
+Apps built with [`cardea-kotlin`](../../kotlin/README.md) sign in through the
+hosted pages in the system browser. Give them their own client:
+
+```ts
+new IdentityPool(this, 'Identity', {
+  // …
+  managedLogin: true,
+  nativeClient: {
+    callbackUrls: [
+      'http://127.0.0.1/callback', // desktop; Cognito accepts any port on it
+      'com.example.app://auth/callback', // Android
+    ],
+    logoutUrls: [
+      'http://127.0.0.1:47315/signed-out', // desktop; the port is fixed here
+      'com.example.app://auth/signed-out', // Android
+    ],
+  },
+});
+```
+
+The client has no secret and allows no password flow: the authorization code
+grant with PKCE is its only way in, and refresh tokens are not rotated. A URL
+must be `https`, `http://127.0.0.1` or the app's own scheme. Your API must
+accept this client id as a token audience beside the web client's. AWS describes
+plain-HTTP loopback URLs as being for testing; they are also what RFC 8252 gives
+desktop apps. `managedLogin: true` is what lets an app ask for a fresh sign-in
+(`prompt=login`).
 
 ### Your API service
 

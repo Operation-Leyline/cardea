@@ -17,6 +17,11 @@ export const devClient = {
   logoutUrls: ['http://localhost:5173/'],
 };
 
+export const nativeClient = {
+  callbackUrls: ['http://127.0.0.1/callback', 'com.example.app://auth/callback'],
+  logoutUrls: ['http://127.0.0.1:47315/signed-out', 'com.example.app://auth/signed-out'],
+};
+
 export function fn(stack: Stack, id = 'Triggers'): lambda.Function {
   return new lambda.Function(stack, id, {
     runtime: lambda.Runtime.PROVIDED_AL2023,

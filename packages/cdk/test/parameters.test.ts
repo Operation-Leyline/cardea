@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { build, devClient } from './support';
+import { build, devClient, nativeClient } from './support';
 
 const names = (template: ReturnType<typeof build>['template']) =>
   Object.values(template.findResources('AWS::SSM::Parameter'))
@@ -20,6 +20,9 @@ describe('SSM parameters', () => {
     ]);
     expect(names(build({ ssmPrefix: '/example/auth', devClient }).template)).toContain(
       '/example/auth/dev-web-client-id',
+    );
+    expect(names(build({ ssmPrefix: '/example/auth', nativeClient }).template)).toContain(
+      '/example/auth/native-client-id',
     );
   });
 

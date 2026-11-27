@@ -10,6 +10,7 @@ export interface LogicalIds {
   readonly pool?: string;
   readonly webClient?: string;
   readonly devClient?: string;
+  readonly nativeClient?: string;
   readonly prefixDomain?: string;
   readonly brandedDomain?: string;
   readonly google?: string;
