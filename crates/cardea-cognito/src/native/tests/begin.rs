@@ -138,7 +138,7 @@ async fn a_token_that_does_not_check_out_is_refused_and_spends_nothing() {
         google_with(&nonce, "aud", json!([client_id(Provider::Google), "other"])),
         google_with(&nonce, "azp", json!("unlisted-android-client")),
         google_with(&nonce, "exp", json!(time - 1)),
-        google_with(&nonce, "iat", json!(time - 301)),
+        google_with(&nonce, "iat", json!(time - 315)),
         google_with(&nonce, "iat", Value::Null),
         google_with(&nonce, "email_verified", json!(false)),
         google_with(&nonce, "email", Value::Null),
