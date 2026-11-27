@@ -169,9 +169,9 @@ condition covers one row, so the cap could no longer be one conditional write
 over the old counter and the new one, and instances that hold only the old key
 would go on counting on the old rows until replaced. Keeping the count exact
 would take a rollout in two steps. A key changes rarely and deliberately, and a
-reset allows no more than another cap per key, so the library does not do this. Do not schedule automatic rotation. To rotate,
-store the new value, then change the sender function's configuration so that
-every instance is replaced.
+reset allows no more than another cap per key, so the library does not do this.
+Do not schedule automatic rotation. To rotate, store the new value, then change
+the sender function's configuration so that every instance is replaced.
 
 **Moving from unkeyed rows.** Rows from earlier deployments are named
 `MAIL#{sha256}` and `DELIVERY#{sha256}`. Keyed rows are named `MAILK#` and
