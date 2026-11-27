@@ -278,7 +278,11 @@ customEmailSender: {
   it, change the function's configuration so that every instance is replaced.
 
 A sender released before the secret, its variable and its grant are in place
-refuses every message. Deploy them first, or together with it.
+refuses every message. For a function in the pool's stack one deploy is enough:
+the construct puts the grant in a policy the function depends on, so
+CloudFormation applies it before it updates the function. For any other
+function, including one in another stack (which deploys before the pool's), put
+the three in place with one deploy and release the new sender with a later one.
 
 ## Changing email
 

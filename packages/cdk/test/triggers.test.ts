@@ -100,11 +100,13 @@ describe('triggers', () => {
     },
   );
 
+  /** Every statement attached to the sender function's role, by action. */
   const senderPolicyOf = (template: Template): any[] => {
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
-    const found = policies.filter((p) => JSON.stringify(p.Properties.Roles).includes('Sender'));
-    expect(found).toHaveLength(1);
-    return found[0].Properties.PolicyDocument.Statement;
+    return policies
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes('Sender'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .sort((a, b) => String(a.Action).localeCompare(String(b.Action)));
   };
   const environmentOf = (template: Template, name: string): Record<string, unknown> | undefined => {
     const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
@@ -124,8 +126,11 @@ describe('triggers', () => {
       { Action: 'secretsmanager:GetSecretValue', Effect: 'Allow', Resource: { Ref: secretId } },
     ]);
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
-    const handlerPolicy = policies.find((p) => !JSON.stringify(p.Properties.Roles).includes('Sender'));
-    const handlerActions = handlerPolicy.Properties.PolicyDocument.Statement.flatMap(actionsOf);
+    const handlerActions = policies
+      .filter((p) => !JSON.stringify(p.Properties.Roles).includes('Sender'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .flatMap(actionsOf);
+    expect(handlerActions).toContain('cognito-idp:AdminGetUser');
     expect(handlerActions).not.toContain('kms:Decrypt');
     expect(handlerActions).not.toContain('secretsmanager:GetSecretValue');
   });
@@ -143,7 +148,7 @@ describe('triggers', () => {
     expect(environmentOf(template, 'Triggers')).toBeUndefined();
   });
 
-  it('tells a handler that sends the mail only the budget key secret, in its one policy', () => {
+  it('tells a handler that sends the mail only the budget key secret', () => {
     const { template } = build((_, handler) => ({ triggers: { handler, customEmailSender: {} } }));
     const [secretId] = only(template, 'AWS::SecretsManager::Secret');
     expect(environmentOf(template, 'Triggers')).toEqual({ MAIL_BUDGET_KEY_SECRET: { Ref: secretId } });
@@ -152,7 +157,8 @@ describe('triggers', () => {
       Effect: 'Allow',
       Resource: { Ref: secretId },
     });
-    template.resourceCountIs('AWS::IAM::Policy', 1);
+    // The trigger policy, and the key's own.
+    template.resourceCountIs('AWS::IAM::Policy', 2);
   });
 
   it('grants an imported sender function through its role and cannot configure it', () => {

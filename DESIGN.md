@@ -178,8 +178,10 @@ every instance is replaced.
 `DELIVERYK#`, so the two never collide, and the library neither reads nor writes
 the old ones. They lapse through their TTL (`expiresAt`, two days after the
 start of the row's day). The switch resets each mailbox's daily counters once,
-on the same terms as a rotation. Create the secret, the variable and the grant
-before releasing a sender that needs them.
+on the same terms as a rotation. The secret, the variable and the grant must be
+in place before a sender that needs them runs. The CDK construct orders this for
+a function in the pool's stack; `packages/cdk/README.md` says what to do for any
+other.
 
 ## The trigger handler
 

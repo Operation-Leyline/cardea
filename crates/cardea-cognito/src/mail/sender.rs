@@ -158,6 +158,17 @@ impl EmailSender {
         event: &Value,
         request_id: &str,
     ) -> Result<Value, MailError> {
+        self.send_at(delivery, event, request_id, now()).await
+    }
+
+    /// [`EmailSender::send`], counting in the UTC day that holds `time`.
+    async fn send_at(
+        &self,
+        delivery: &dyn MailDelivery,
+        event: &Value,
+        request_id: &str,
+        time: i64,
+    ) -> Result<Value, MailError> {
         if required(&event["request"], "type")? != "customEmailSenderRequestV1" {
             return Err(MailError::UnsupportedVersion);
         }
@@ -180,7 +191,7 @@ impl EmailSender {
                 recipient,
                 &key,
                 counter,
-                now(),
+                time,
             )
             .await?;
         }

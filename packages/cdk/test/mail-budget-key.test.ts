@@ -68,6 +68,26 @@ describe('mail budget key', () => {
     template.resourceCountIs('AWS::SecretsManager::ResourcePolicy', 0);
   });
 
+  it.each(['the handler', 'its own function'])(
+    'releases a sender that is %s only after it may read the secret',
+    (which) => {
+      const { template } = build((stack, handler) => ({
+        triggers: { handler, customEmailSender: which === 'the handler' ? {} : { handler: fn(stack, 'Sender') } },
+      }));
+      const policies = Object.entries(template.findResources('AWS::IAM::Policy')) as [string, any][];
+      const granting = policies.filter(([, p]) => JSON.stringify(p).includes('secretsmanager:GetSecretValue'));
+      expect(granting).toHaveLength(1);
+      const [policyId, policy] = granting[0];
+      // It names the secret and nothing that depends on the function.
+      expect(JSON.stringify(policy)).not.toContain('UserPool');
+      const waiting = Object.entries(template.findResources('AWS::Lambda::Function'))
+        .filter(([, f]: [string, any]) => (f.DependsOn ?? []).includes(policyId))
+        .map(([id]) => id);
+      expect(waiting).toHaveLength(1);
+      expect(waiting[0]).toMatch(which === 'the handler' ? /^Triggers/ : /^Sender/);
+    },
+  );
+
   it('takes an existing secret by its full ARN', () => {
     const arn = 'arn:aws:secretsmanager:us-east-1:111111111111:secret:example/budget-AbCdEf';
     const { template, identity } = build((stack, handler) => {

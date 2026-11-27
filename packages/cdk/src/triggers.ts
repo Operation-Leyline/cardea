@@ -136,21 +136,43 @@ export function grantTriggers(
   directory.grantReadWriteData(policy);
   if (!sender) return;
 
-  const statements = [
-    new iam.PolicyStatement({ actions: ['kms:Decrypt'], resources: [sender.key.keyArn] }),
-    ...readMailBudgetKey(scope, sender.budgetKeySecret),
-  ];
-  const budgetKey = secretId(sender.budgetKeySecret);
+  const decrypt = new iam.PolicyStatement({ actions: ['kms:Decrypt'], resources: [sender.key.keyArn] });
   if (sender.handler === handler) {
-    policy.addStatements(...statements);
+    policy.addStatements(decrypt);
   } else {
     new iam.Policy(scope, 'EmailSenderPolicy', {
       roles: [roleOf(scope, sender.handler, 'triggers.customEmailSender.handler')],
-      statements,
+      statements: [decrypt],
     });
     setSenderEnvironment(scope, sender.handler, 'COGNITO_EMAIL_KEY_ARN', sender.key.keyArn, 'email key');
   }
-  setSenderEnvironment(scope, sender.handler, 'MAIL_BUDGET_KEY_SECRET', budgetKey, 'mail budget key');
+  grantMailBudgetKey(scope, sender);
+}
+
+/**
+ * Let the sender read the mail budget's key, and tell it which secret holds it.
+ *
+ * The statements name the secret and not the pool, so they go in a policy of
+ * their own that the function can depend on: CloudFormation then grants the
+ * read before it releases a function that needs it, which without the key sends
+ * nothing. That order can only be set for a function in this stack.
+ */
+function grantMailBudgetKey(scope: Construct, { handler, budgetKeySecret }: EmailSender): void {
+  const policy = new iam.Policy(scope, 'MailBudgetKeyPolicy', {
+    roles: [roleOf(scope, handler, 'triggers.customEmailSender.handler')],
+    statements: readMailBudgetKey(scope, budgetKeySecret),
+  });
+  const id = secretId(budgetKeySecret);
+  setSenderEnvironment(scope, handler, 'MAIL_BUDGET_KEY_SECRET', id, 'mail budget key');
+  if (isLocalFunction(scope, handler)) {
+    // The function's resource alone: its role, a child too, comes before the policy.
+    handler.node.defaultChild!.node.addDependency(policy);
+  }
+}
+
+/** Whether `handler` is a function this app defines in `scope`'s stack, which it can therefore configure. */
+function isLocalFunction(scope: Construct, handler: lambda.IFunction): handler is lambda.Function {
+  return handler instanceof lambda.Function && Stack.of(handler) === Stack.of(scope);
 }
 
 /** What each sender function has been told, so a second pool cannot quietly replace it. */
@@ -169,7 +191,7 @@ function setSenderEnvironment(
   value: string,
   what: string,
 ): void {
-  if (!(handler instanceof lambda.Function) || Stack.of(handler) !== Stack.of(scope)) return;
+  if (!isLocalFunction(scope, handler)) return;
   const told = senderEnvironments.get(handler) ?? new Map<string, string>();
   if ((told.get(name) ?? value) !== value) {
     throw new Error(

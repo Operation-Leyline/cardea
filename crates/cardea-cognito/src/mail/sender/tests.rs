@@ -25,6 +25,9 @@ impl CodeDecryptor for Plain {
     }
 }
 
+/// A fixed time, so that a test counting to a cap cannot straddle two days.
+const NOON: i64 = 1_790_000_000;
+
 /// A budget key whose bytes are all `byte`.
 fn budget_key_of(byte: u8) -> BudgetKey {
     BudgetKey::from_secret(&hex::encode([byte; 32])).unwrap()
@@ -177,12 +180,14 @@ async fn the_cap_refuses_before_delivery() {
     ] {
         for n in 0..cap {
             sender
-                .send(&outbox, &event(source, &n.to_string()), "r")
+                .send_at(&outbox, &event(source, &n.to_string()), "r", NOON)
                 .await
                 .unwrap();
         }
         assert!(matches!(
-            sender.send(&outbox, &event(source, "over"), "r").await,
+            sender
+                .send_at(&outbox, &event(source, "over"), "r", NOON)
+                .await,
             Err(MailError::Refused(Refusal::CapReached))
         ));
     }
@@ -414,27 +419,29 @@ async fn a_rotated_key_takes_effect_in_a_new_sender_with_fresh_counters() {
     let outbox = Outbox::default();
     for n in 0..DAILY_CAP {
         running
-            .send(&outbox, &event("SignUp", &n.to_string()), "r")
+            .send_at(&outbox, &event("SignUp", &n.to_string()), "r", NOON)
             .await
             .unwrap();
     }
 
     secret.set(2);
     assert!(matches!(
-        running.send(&outbox, &event("SignUp", "over"), "r").await,
+        running
+            .send_at(&outbox, &event("SignUp", "over"), "r", NOON)
+            .await,
         Err(MailError::Refused(Refusal::CapReached))
     ));
 
     let started = EmailSender::new(ddb, table, secret, Plain);
     for n in 0..DAILY_CAP {
         started
-            .send(&outbox, &event("SignUp", &format!("new{n}")), "r")
+            .send_at(&outbox, &event("SignUp", &format!("new{n}")), "r", NOON)
             .await
             .unwrap();
     }
     assert!(matches!(
         started
-            .send(&outbox, &event("SignUp", "new-over"), "r")
+            .send_at(&outbox, &event("SignUp", "new-over"), "r", NOON)
             .await,
         Err(MailError::Refused(Refusal::CapReached))
     ));
