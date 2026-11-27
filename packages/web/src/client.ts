@@ -271,7 +271,13 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   async function leaveFor(provider: Provider, returnTo?: string, signal?: AbortSignal): Promise<void> {
     const here = new URL(window.location.href);
     const target = returnTo ?? `${here.pathname}${here.search}${here.hash}`;
-    redirect(await startAttempt(config, provider, here, target, attemptStorage, store.generation(), signal));
+    const url = await startAttempt(config, provider, here, target, attemptStorage, store.generation());
+    // Given up while this was being prepared: no attempt is left behind.
+    if (signal?.aborted) {
+      discardAttempt(config, attemptStorage);
+      throw signal.reason;
+    }
+    redirect(url);
   }
 
   async function signInWithGoogle(wanted: GoogleSignInOptions): Promise<GoogleSignInResult> {
@@ -279,10 +285,10 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     const started = mark();
     const controller = new AbortController();
     const cancel = () => controller.abort(new CardeaError("sign-in-cancelled"));
-    // A sign-in or sign-out elsewhere ends this one: it could not be saved. An
-    // old session expiring is neither.
+    // Someone signing in or out ends this one. An old session expiring is
+    // neither, and from another tab it looks like a sign-out that left no mark.
     const unsubscribe = store.subscribe((event) => {
-      if (event.type === "signedOut" && event.reason === "expired") return;
+      if (event.type === "signedOut" && started === mark()) return;
       controller.abort(new CardeaError("session-superseded"));
     });
     wanted.signal?.addEventListener("abort", cancel, { once: true });

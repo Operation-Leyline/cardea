@@ -144,13 +144,21 @@ describe("signing in with Google in a popup", () => {
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));
       const reached = vi.fn();
-      const hold = async <T,>(name: string, answer: () => T | Promise<T>) => {
-        if (name === step) {
-          reached();
-          await held;
-        }
-        return answer();
+      let late: Promise<unknown> | undefined;
+      const hold = <T,>(name: string, answer: () => T | Promise<T>): Promise<T> => {
+        if (name !== step) return Promise.resolve(answer());
+        reached();
+        const answered = held.then(answer);
+        late = answered;
+        return answered;
       };
+      const bodies: Promise<unknown>[] = [];
+      const json = Response.prototype.json;
+      vi.spyOn(Response.prototype, "json").mockImplementation(function (this: Response) {
+        const body = json.call(this);
+        bodies.push(body);
+        return body;
+      });
       const page = setup({ confirmProviderSession: () => hold("confirmProviderSession", () => {}) });
       page.adapter.beginProviderSignIn.mockImplementation(() =>
         hold("beginProviderSignIn", () => ({ username: "user-ada", ticket: "ticket-1" })),
@@ -167,7 +175,12 @@ describe("signing in with Google in a popup", () => {
       controller.abort();
       await expect(result).rejects.toMatchObject({ code: "sign-in-cancelled" });
       release();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Lets the abandoned step run out: its answer arrives and is read, and
+      // whatever would follow is started before the next turn of the event loop.
+      await late;
+      await new Promise((resolve) => setImmediate(resolve));
+      await Promise.allSettled(bodies);
+      await new Promise((resolve) => setImmediate(resolve));
       expect(localStorage.getItem(SESSION_KEY)).toBeNull();
       expect(page.cognito.calls).toHaveLength(calls);
     },
@@ -302,6 +315,25 @@ describe("signing in with Google in a popup", () => {
     await expect(result).resolves.toMatchObject({ status: "signedIn" });
   });
 
+  it("goes on when an old session expires in another tab", async () => {
+    localStorage.setItem(SESSION_KEY, await storedSession({ expiresIn: -60 }));
+    const page = setup();
+    const { result } = await popup(page);
+    // An expiry removes the session and leaves the sign-in mark alone.
+    otherTabWrites(SESSION_KEY, null);
+    await page.google.press();
+    await expect(result).resolves.toMatchObject({ status: "signedIn" });
+  });
+
+  it("gives way to a sign-out in another tab", async () => {
+    localStorage.setItem(SESSION_KEY, await storedSession({ expiresIn: -60 }));
+    const page = setup();
+    const { result } = await popup(page);
+    localStorage.setItem(SESSION_KEY.replace(".session.", ".generation."), "signed-out-elsewhere");
+    otherTabWrites(SESSION_KEY, null);
+    await expect(result).rejects.toMatchObject({ code: "session-superseded" });
+  });
+
   it("needs somewhere to draw the button", async () => {
     const page = setup();
     await expect(page.client.signInWithGoogle({ mode: "popup" })).rejects.toMatchObject({ code: "not-configured" });
@@ -336,13 +368,21 @@ describe("falling back to the redirect", () => {
     await expectRedirect(page);
   });
 
-  it("not for a caller who gives up while it is being prepared", async () => {
-    const page = setup();
-    page.google.block();
+  it.each(["prepared", "saved"])("not for a caller who gives up as the attempt is %s", async (moment) => {
     const controller = new AbortController();
+    const attemptStorage = {
+      getItem: (key: string) => sessionStorage.getItem(key),
+      removeItem: (key: string) => sessionStorage.removeItem(key),
+      setItem: (key: string, value: string) => {
+        sessionStorage.setItem(key, value);
+        if (moment === "saved") controller.abort();
+      },
+    } as Storage;
+    const page = setup({ attemptStorage });
+    page.google.block();
     const digest = crypto.subtle.digest.bind(crypto.subtle);
     vi.spyOn(crypto.subtle, "digest").mockImplementation((...input) => {
-      controller.abort();
+      if (moment === "prepared") controller.abort();
       return digest(...input);
     });
     await expect(
