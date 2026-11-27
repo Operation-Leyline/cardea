@@ -301,15 +301,27 @@ A `ProofSource` returns an ID token that the provider issued to the challenge's
 
 - **Google on Android.** `GoogleProofSource` shows "Sign in with Google". The
   Google project needs the web client (the challenge's `clientId`) and an
-  Android client for your package and signing certificate. **Known limit:** such
-  a token names the Android client in `azp`, and `cardea-cognito` refuses an
-  `azp` other than the web client id, so linking from Android is refused until
-  the server accepts it.
+  Android client for your package and signing certificate. Such a token names
+  the Android client in `azp`, and your API refuses it until you list that
+  client on its verifier (see below).
 - **Google on desktop.** Google's desktop OAuth flow issues tokens to a desktop
   client id, not to the web client the server requires.
 - **Apple.** Neither platform has a native Sign in with Apple. Apple's web flow
   returns only to an HTTPS address registered on the Services ID, so an app
   needs a page of yours to run it and hand the token back.
+
+### Server setting for Android linking
+
+The API that runs `CompleteIdentityLink` must name every Android OAuth client id
+it accepts; the list is empty by default. Debug and release builds signed with
+different certificates have different ids.
+
+```rust
+let verifier = JwtVerifier::new()?
+    .with_authorized_parties(Provider::Google, [android_client_id]);
+```
+
+The audience must still be the web client id.
 
 Where there is no source, link from the web app. Signing in with Google or Apple
 through the browser works on both platforms regardless.

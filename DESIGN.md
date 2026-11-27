@@ -222,6 +222,13 @@ pool links and the directory binds to this account. Then it calls `AdminDisableP
 and drops the entry; a repeat finds the marks and finishes. A marked identity
 is neither linked nor signed in with until that is done.
 
+**Audience and authorized party.** A proof's audience is always exactly the
+provider's configured client id. An `azp` claim, when the token has one, must be
+that id or one of the extra authorized parties the product gives the verifier
+(`JwtVerifier::with_authorized_parties`). The list is per provider and empty by
+default. It is for tokens a native app asks for on behalf of the web client:
+Google names the Android app's own OAuth client in `azp`.
+
 **Which identities a signed-in person may link** (decided 2026-11-26):
 
 - **Same mailbox.** If the provider's email has the account's person key, the link is allowed. This is Leyline's existing rule.
