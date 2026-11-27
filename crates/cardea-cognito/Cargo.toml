@@ -3,6 +3,7 @@ name = "cardea-cognito"
 description = "The directory table, the Cognito admin calls, the trigger handler, linking, sign-in methods and the mail budget"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

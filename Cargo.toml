@@ -4,6 +4,8 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
+# The oldest toolchain CI builds and tests with.
+rust-version = "1.97.1"
 license = "Apache-2.0"
 publish = false
 

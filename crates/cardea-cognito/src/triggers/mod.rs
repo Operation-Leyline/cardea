@@ -64,7 +64,10 @@ pub async fn handle(
     product: &(impl Product + ?Sized),
     payload: Value,
 ) -> Result<Value, TriggerError> {
-    tokio::time::timeout(DEADLINE, dispatch(directory, product, payload))
+    // Boxed, so that a product's own crate can lay out the handler's future
+    // within the default recursion limit on Rust 1.97.1.
+    let answer = Box::pin(dispatch(directory, product, payload));
+    tokio::time::timeout(DEADLINE, answer)
         .await
         .map_err(|_| TriggerError::TimedOut)?
 }
