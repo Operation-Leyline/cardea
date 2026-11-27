@@ -32,9 +32,15 @@ async function call(config: ResolvedConfig, operation: string, body: object): Pr
 /**
  * Cognito's custom authentication flow: start it for `username`, answer its one
  * challenge with the ticket, and take the tokens. Any other challenge is
- * refused, and the ticket is sent only to the library's own.
+ * refused, and the ticket is sent only to the library's own, and only while
+ * `signal` has not given up.
  */
-export async function exchangeTicket(config: ResolvedConfig, username: string, ticket: string): Promise<Tokens> {
+export async function exchangeTicket(
+  config: ResolvedConfig,
+  username: string,
+  ticket: string,
+  signal: AbortSignal,
+): Promise<Tokens> {
   const started = await call(config, "InitiateAuth", {
     AuthFlow: "CUSTOM_AUTH",
     ClientId: config.clientId,
@@ -48,6 +54,7 @@ export async function exchangeTicket(config: ResolvedConfig, username: string, t
   ) {
     throw new CardeaError("challenge-unsupported");
   }
+  if (signal.aborted) throw signal.reason;
   const finished = await call(config, "RespondToAuthChallenge", {
     ChallengeName: "CUSTOM_CHALLENGE",
     ClientId: config.clientId,

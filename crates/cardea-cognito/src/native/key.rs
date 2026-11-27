@@ -7,7 +7,10 @@
 //! It is a secret of its own, not the mail budget's key: a product has it only
 //! when it offers native sign-in, whether or not it sends its own mail; its two
 //! readers (the API service and the trigger function) are not the mail
-//! sender's; and changing it costs only the sign-ins in flight.
+//! sender's.
+//!
+//! A change costs native sign-ins alone, and not only those in flight: while the
+//! two readers can still hold different keys, new ones fail too.
 //!
 //! **Format:** 32 random bytes as 64 hexadecimal characters, as the mail
 //! budget's key. Surrounding white space is ignored; anything else is refused.

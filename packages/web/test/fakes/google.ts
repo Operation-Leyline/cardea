@@ -10,10 +10,12 @@ export function installFakeGoogle() {
   let listener: ((moment: Moment) => void) | undefined;
   let cancelled = 0;
   let broken = false;
+  let click: (() => void) | undefined;
   const id = {
     initialize: (options: Record<string, unknown>) => void (settings = options),
-    renderButton: (parent: HTMLElement) => {
+    renderButton: (parent: HTMLElement, options: { click_listener?: () => void }) => {
       if (broken) throw new Error("blocked");
+      click = options.click_listener;
       drawn++;
       parent.append(document.createElement("button"));
     },
@@ -28,6 +30,8 @@ export function installFakeGoogle() {
     prompted: () => listener !== undefined,
     cancelled: () => cancelled,
     moment: (moment: Moment) => listener!(moment),
+    /** The person presses the button, which opens Google's popup. */
+    open: () => click!(),
     /** The person picks an account: Google answers with a token carrying the nonce. */
     async press(nonce: string = settings.nonce) {
       const idToken = (await issueTokens({ nonce })).id_token;

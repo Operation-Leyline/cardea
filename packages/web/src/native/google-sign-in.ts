@@ -73,6 +73,7 @@ async function obtainToken(
       clientId: challenge.clientId,
       nonce: challenge.nonce,
       lifetimeMs: lifetimeOf(challenge),
+      graceMs: RENEW_EARLY_MS,
       signal,
       container: options.container,
       button: options.button,
@@ -110,6 +111,10 @@ export async function nativeGoogleSignIn(
 ): Promise<NativeOutcome> {
   const { config, adapter, verify, confirm, assertCurrent } = dependencies;
   const fallback = options.fallback ?? options.mode === "popup";
+  // Nothing more is asked for once the caller has given up.
+  const unlessAbandoned = <T>(work: () => Promise<T>): Promise<T> =>
+    signal.aborted ? Promise.reject(signal.reason) : abortable(signal, work());
+  if (signal.aborted) throw signal.reason;
   const unavailable = (): NativeOutcome => {
     if (fallback) return "redirect";
     throw new CardeaError("provider-unavailable");
@@ -127,19 +132,19 @@ export async function nativeGoogleSignIn(
   if (idToken === "dismissed") return idToken;
 
   assertCurrent();
-  const begun = await adapter
-    .beginProviderSignIn({ provider: "Google", idToken, appClientId: config.clientId })
-    .catch((error: unknown) => {
-      throw asksToLink(error) ? new CardeaError("link-required") : error;
-    });
+  const begun = await unlessAbandoned(() =>
+    adapter.beginProviderSignIn({ provider: "Google", idToken, appClientId: config.clientId }),
+  ).catch((error: unknown) => {
+    throw asksToLink(error) ? new CardeaError("link-required") : error;
+  });
   // Raw causes can carry identity details, so they stop here.
   let stage: CardeaErrorCode = "token-exchange-failed";
   try {
-    const tokens = await exchangeTicket(config, begun.username, begun.ticket);
+    const tokens = await unlessAbandoned(() => exchangeTicket(config, begun.username, begun.ticket, signal));
     stage = "token-verification-failed";
-    const subject = await verify(tokens, {});
+    const subject = await unlessAbandoned(() => verify(tokens, {}));
     stage = "account-check-failed";
-    await confirm?.({ idToken: tokens.idToken, subject });
+    await unlessAbandoned(async () => confirm?.({ idToken: tokens.idToken, subject }));
     const username = usernameOf(tokens.idToken) ?? begun.username;
     return { record: { version: 1, method: "Google", native: true, username, ...tokens } };
   } catch (error) {

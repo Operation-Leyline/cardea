@@ -121,7 +121,9 @@ the user pool's API, and signing out of it does not visit the hosted domain.
   Google from their profile. The adapter's doc comment says how your API's
   `identityLinkRequired` becomes it.
 - Popup mode waits until the person picks an account, and draws a new button
-  with a new nonce before the old one expires. Abort `signal` to remove it.
+  with a new nonce before the old one expires.
+- Abort `signal` to give up, at any step: the button or prompt goes, nothing is
+  saved and the page does not leave.
 - Google keeps one set of settings per page: run one native sign-in at a time,
   and none beside a Google linking button.
 - A pool that asks this flow for a second factor ends it with

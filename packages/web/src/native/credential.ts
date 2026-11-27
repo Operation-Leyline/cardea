@@ -15,6 +15,8 @@ export interface CredentialRequest {
   nonce: string;
   /** How long the nonce is worth waiting with, in milliseconds. */
   lifetimeMs: number;
+  /** How much longer an answer under way is waited for, once the button is pressed. */
+  graceMs: number;
   signal: AbortSignal;
   /** Where Google draws its button, in popup mode. */
   container?: HTMLElement | undefined;
@@ -45,7 +47,16 @@ export async function requestCredential(request: CredentialRequest): Promise<Cre
   let timer: ReturnType<typeof setTimeout> | undefined;
   let answered = false;
   const outcome = new Promise<Credential>((resolve, reject) => {
-    timer = setTimeout(() => resolve("expired"), request.lifetimeMs);
+    const expire = () => resolve("expired");
+    const deadline = Date.now() + request.lifetimeMs + request.graceMs;
+    timer = setTimeout(expire, request.lifetimeMs);
+    // A popup may be open now. Renewing the button would lose its answer, which
+    // the nonce is still good for until it runs out.
+    const pressed = () => {
+      clearTimeout(timer);
+      timer = setTimeout(expire, deadline - Date.now());
+      (button?.click_listener as (() => void) | undefined)?.();
+    };
     try {
       google.initialize({
         client_id: clientId,
@@ -60,7 +71,7 @@ export async function requestCredential(request: CredentialRequest): Promise<Cre
         },
       });
       if (host) {
-        google.renderButton(host, { type: "standard", text: "signin_with", ...button });
+        google.renderButton(host, { type: "standard", text: "signin_with", ...button, click_listener: pressed });
         return;
       }
       google.prompt((moment: PromptMoment) => {

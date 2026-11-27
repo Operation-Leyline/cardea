@@ -57,8 +57,13 @@ impl MethodsRow {
         &mut self.identities[at]
     }
 
+    /// Whether `identity` is on the list with no unlink of it under way.
+    pub(crate) fn stands(&self, identity: &Identity) -> bool {
+        self.find(identity).is_some_and(|entry| !entry.removing)
+    }
+
     /// Whether an unlink of `identity` is unfinished.
-    pub(crate) fn is_removing(&self, identity: &Identity) -> bool {
+    pub(super) fn is_removing(&self, identity: &Identity) -> bool {
         self.find(identity).is_some_and(|entry| entry.removing)
     }
 }

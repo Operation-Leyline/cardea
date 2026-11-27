@@ -9,7 +9,12 @@ import com.operationleyline.cardea.signin.SignInCheck
 import com.operationleyline.cardea.signin.SignInNonce
 import com.operationleyline.cardea.signin.SignInTicket
 import java.time.Duration
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -178,11 +183,26 @@ class ProviderSignInTest {
         }
     }
 
+    /** The device's clock may be wrong, so the wait has bounds of its own. Time is virtual here. */
     @Test
-    fun `gives up on an expired nonce`() = runBlocking {
-        api.nonceLifetime = Duration.ZERO
-        assertFails(CardeaErrorCode.SignInTimedOut) { signIn() }
-        assertNull(asked)
+    fun `waits for the provider within bounds, whatever the device's clock says`() = runTest {
+        for ((lifetime, waited) in listOf(-3600L to 60L, 300L to 300L, 86_400L to 600L)) {
+            api.nonceLifetime = Duration.ofSeconds(lifetime)
+            val began = testScheduler.currentTime
+            assertFails(CardeaErrorCode.SignInTimedOut) { signIn { awaitCancellation() } }
+            assertEquals(waited * 1000, testScheduler.currentTime - began)
+        }
+        assertTrue(api.begun.isEmpty())
+    }
+
+    @Test
+    fun `saves nothing once the caller has given up`() = runBlocking {
+        val strict = pool.client(sessions, check = SignInCheck { _, _ -> currentCoroutineContext().cancel() })
+        val attempt = async { strict.signInWithProof(Provider.Google, api, google) }
+        attempt.join()
+        assertTrue(attempt.isCancelled)
+        assertNull(sessions.load())
+        strict.close()
     }
 
     @Test

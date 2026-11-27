@@ -107,6 +107,81 @@ describe("signing in with Google in a popup", () => {
     await expect(result).resolves.toMatchObject({ status: "signedIn" });
   });
 
+  it("keeps a pressed button's nonce until it runs out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const page = setup();
+    const listener = vi.fn();
+    const result = page.client.signInWithGoogle({
+      mode: "popup",
+      container: page.container,
+      button: { click_listener: listener },
+    });
+    await vi.waitFor(() => expect(page.google.buttons()).toBe(1));
+    page.google.open();
+    expect(listener).toHaveBeenCalledOnce();
+    // Past the early renewal, before the expiry.
+    await vi.advanceTimersByTimeAsync(9 * 60_000 + 45_000);
+    expect(page.google.buttons()).toBe(1);
+    await page.google.press();
+    await expect(result).resolves.toMatchObject({ status: "signedIn" });
+    expect(page.adapter.createSignInNonce).toHaveBeenCalledOnce();
+  });
+
+  it("renews a pressed button once its nonce has run out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const page = setup();
+    const { result } = await popup(page);
+    page.google.open();
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+    await vi.waitFor(() => expect(page.google.settings().nonce).toBe("nonce-2"));
+    await page.google.press();
+    await expect(result).resolves.toMatchObject({ status: "signedIn" });
+  });
+
+  it.each(["beginProviderSignIn", "InitiateAuth", "RespondToAuthChallenge", "confirmProviderSession"])(
+    "saves nothing when cancelled during %s",
+    async (step) => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const reached = vi.fn();
+      const hold = async <T,>(name: string, answer: () => T | Promise<T>) => {
+        if (name === step) {
+          reached();
+          await held;
+        }
+        return answer();
+      };
+      const page = setup({ confirmProviderSession: () => hold("confirmProviderSession", () => {}) });
+      page.adapter.beginProviderSignIn.mockImplementation(() =>
+        hold("beginProviderSignIn", () => ({ username: "user-ada", ticket: "ticket-1" })),
+      );
+      for (const operation of ["InitiateAuth", "RespondToAuthChallenge"] as const) {
+        const answer = page.cognito.operations[operation]!;
+        page.cognito.operations[operation] = (body) => hold(operation, () => answer(body));
+      }
+      const controller = new AbortController();
+      const { result } = await popup(page, { signal: controller.signal });
+      await page.google.press();
+      await vi.waitFor(() => expect(reached).toHaveBeenCalled());
+      const calls = page.cognito.calls.length;
+      controller.abort();
+      await expect(result).rejects.toMatchObject({ code: "sign-in-cancelled" });
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull();
+      expect(page.cognito.calls).toHaveLength(calls);
+    },
+  );
+
+  it.each([{}, { providerSignIn: undefined }])("does nothing for a caller who had already given up", async (options) => {
+    const page = setup(options as ClientOptions);
+    await expect(
+      page.client.signInWithGoogle({ mode: "popup", container: page.container, signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ code: "sign-in-cancelled" });
+    expect(page.redirect).not.toHaveBeenCalled();
+    expect(page.google.buttons()).toBe(0);
+  });
+
   it("refuses a token that carries another nonce", async () => {
     const page = setup();
     const { result } = await popup(page);

@@ -382,7 +382,10 @@ flow:
 
 The tokens are ordinary Cognito tokens of that app client. They refresh with
 `REFRESH_TOKEN_AUTH` at the user pool's API, and no hosted session goes with
-them, so signing out does not visit the hosted domain.
+them, so signing out does not visit the hosted domain. As with a password
+sign-in at that API, the access token carries the scope
+`aws.cognito.signin.user.admin`, not the OAuth scopes of a hosted sign-in: an
+API that requires those refuses it.
 
 Shapes (field names fixed by the client packages' adapters):
 
@@ -428,8 +431,8 @@ refuses.
   listed.
 - Redeemed by the verify trigger: the row must name the same user and app client
   and be unexpired; one delete conditional on all three removes it, so one
-  caller succeeds; and the identity that proved the person must still be bound
-  to that user, with no unlink of it under way.
+  caller succeeds; and the identity that proved the person must still be on that
+  user's list, with no unlink of it under way, and bound to that user.
 
 ### The custom flow
 
@@ -452,8 +455,10 @@ Nonce and ticket rows are named by HMAC-SHA-256 under a secret of their own:
 `SIGN_IN_TICKET_KEY_SECRET`, read by the trigger function and the product's API
 service. It is not the mail budget key: that one belongs to the mail sender,
 which has no business making sign-ins, and a product without a custom email
-sender has none. A running instance keeps the value for five minutes.
-Rotation costs only the sign-ins under way. A product with its own secrets layer
+sender has none. A running instance keeps the value for five minutes, so for
+that long after a rotation the API service and the trigger function can hold
+different keys, and native sign-ins fail. Nothing else is lost: change it
+rarely, and schedule no automatic rotation. A product with its own secrets layer
 implements `TicketKeySource`. Without a key nothing is issued and nothing is
 redeemed.
 

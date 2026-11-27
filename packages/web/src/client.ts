@@ -268,10 +268,12 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
     }
   }
 
-  async function leaveFor(provider: Provider, returnTo?: string): Promise<void> {
+  async function leaveFor(provider: Provider, returnTo?: string, signal?: AbortSignal): Promise<void> {
     const here = new URL(window.location.href);
     const target = returnTo ?? `${here.pathname}${here.search}${here.hash}`;
-    redirect(await startAttempt(config, provider, here, target, attemptStorage, store.generation()));
+    const url = await startAttempt(config, provider, here, target, attemptStorage, store.generation());
+    if (signal?.aborted) throw signal.reason;
+    redirect(url);
   }
 
   async function signInWithGoogle(wanted: GoogleSignInOptions): Promise<GoogleSignInResult> {
@@ -295,9 +297,11 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
         wanted,
         controller.signal,
       );
+      // Given up at the last moment: nothing is saved and nobody is sent away.
+      if (controller.signal.aborted) throw controller.signal.reason;
       if (outcome === "dismissed") return { status: "dismissed" };
       if (outcome === "redirect") {
-        await leaveFor("Google", wanted.returnTo);
+        await leaveFor("Google", wanted.returnTo, controller.signal);
         return { status: "redirecting" };
       }
       settleImport();

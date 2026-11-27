@@ -185,6 +185,32 @@ async fn a_ticket_dies_with_the_identitys_binding() {
     assert_eq!(issued.redeem().await, Ok(false));
 }
 
+/// What a redemption sees when an unlink runs to its end between its reads: a
+/// binding still there, and a list that no longer holds the identity.
+#[tokio::test]
+async fn an_identity_off_the_users_list_ends_the_ticket() {
+    for whole_list in [false, true] {
+        let issued = issued().await;
+        if whole_list {
+            issued.fixture.delete(&format!("METHODS#{SUB}")).await;
+        } else {
+            let user = User {
+                user_id: SUB.into(),
+                username: EMAIL.into(),
+                email: EMAIL.into(),
+            };
+            let directory = &issued.fixture.directory;
+            let mut list = directory.methods_row(&user).await.unwrap().unwrap();
+            list.identities.clear();
+            let version = list.version;
+            assert!(directory.replace_methods_row(version, list).await.unwrap());
+        }
+        let binding = issued.fixture.item("PROVIDER#Google#g-subject-1").await;
+        assert!(binding.is_some());
+        assert_eq!(issued.redeem().await, Ok(false), "{whole_list}");
+    }
+}
+
 #[tokio::test]
 async fn an_unlink_under_way_ends_the_ticket() {
     let issued = issued().await;

@@ -78,8 +78,8 @@ pub(super) async fn mint(
 /// 2. that row names the same user and app client and has not expired;
 /// 3. one delete, conditional on all three again, removes the row, so of any
 ///    number of callers one succeeds; and
-/// 4. the provider identity that proved the person is still bound to that user,
-///    with no unlink of it under way.
+/// 4. the provider identity that proved the person is still on that user's list,
+///    with no unlink of it under way, and still bound to that user.
 pub(crate) async fn redeem(
     directory: &AwsDirectory,
     keys: &(impl TicketKeySource + ?Sized),
@@ -132,6 +132,11 @@ pub(crate) async fn redeem(
 
 /// Whether the identity `row` was proved by may still sign its user in: an
 /// unlink since the ticket was made ends it.
+///
+/// The one read of the user's list decides that. An unlink marks the entry
+/// before it touches the pool or the binding and drops it last, so a list that
+/// still holds it unmarked was read before the unlink began. The binding alone
+/// would not do: it could be read before an unlink that then ran to its end.
 async fn still_bound(directory: &AwsDirectory, row: &TicketRow) -> Result<bool, Error> {
     let Some(provider) = Provider::from_cognito_name(&row.provider) else {
         return Ok(false);
@@ -146,8 +151,8 @@ async fn still_bound(directory: &AwsDirectory, row: &TicketRow) -> Result<bool, 
         provider,
         subject: row.subject.clone(),
     };
-    Ok(!directory
+    Ok(directory
         .methods_row(&bound)
         .await?
-        .is_some_and(|list| list.is_removing(&identity)))
+        .is_some_and(|list| list.stands(&identity)))
 }
