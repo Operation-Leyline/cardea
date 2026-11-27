@@ -118,7 +118,10 @@ async fn a_disabled_account_gets_no_ticket() {
     let fixture = fixture().await;
     fixture.google_ticket(SUBJECT, EMAIL).await.unwrap();
     fixture.pool.state().users.get_mut(EMAIL).unwrap().disabled = true;
-    assert!(fixture.google_ticket(SUBJECT, EMAIL).await.is_err());
+    assert_eq!(
+        fixture.google_ticket(SUBJECT, EMAIL).await.unwrap_err(),
+        refused(Error::LinkRequired)
+    );
     assert_eq!(fixture.rows_under("TICKET#").await.len(), 1);
 }
 

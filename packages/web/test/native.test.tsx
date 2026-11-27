@@ -3,7 +3,7 @@ import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { createCardeaClient, type ClientOptions, type ProviderSignInAdapter } from "../src/index.js";
 import { CardeaProvider, useGoogleSignIn } from "../src/react/index.js";
-import { authenticationResult, CognitoFailure, CONFIG, installFakeCognito, issueTokens, otherTabWrites, SESSION_KEY, storedSession } from "./fakes/cognito.js";
+import { ATTEMPT_KEY, authenticationResult, CognitoFailure, CONFIG, installFakeCognito, issueTokens, otherTabWrites, SESSION_KEY, storedSession } from "./fakes/cognito.js";
 import { installFakeGoogle } from "./fakes/google.js";
 
 const CUSTOM = {
@@ -368,28 +368,39 @@ describe("falling back to the redirect", () => {
     await expectRedirect(page);
   });
 
-  it.each(["prepared", "saved"])("not for a caller who gives up as the attempt is %s", async (moment) => {
+  it("not for a caller who gives up while it is prepared, whose attempt is never saved", async () => {
     const controller = new AbortController();
-    const attemptStorage = {
-      getItem: (key: string) => sessionStorage.getItem(key),
-      removeItem: (key: string) => sessionStorage.removeItem(key),
-      setItem: (key: string, value: string) => {
-        sessionStorage.setItem(key, value);
-        if (moment === "saved") controller.abort();
-      },
-    } as Storage;
-    const page = setup({ attemptStorage });
+    const page = setup();
     page.google.block();
+    sessionStorage.setItem(ATTEMPT_KEY, "another redirect's proof");
     const digest = crypto.subtle.digest.bind(crypto.subtle);
     vi.spyOn(crypto.subtle, "digest").mockImplementation((...input) => {
-      if (moment === "prepared") controller.abort();
+      controller.abort();
       return digest(...input);
     });
     await expect(
       page.client.signInWithGoogle({ mode: "popup", container: page.container, signal: controller.signal }),
     ).rejects.toMatchObject({ code: "sign-in-cancelled" });
     expect(page.redirect).not.toHaveBeenCalled();
-    expect(sessionStorage.length).toBe(0);
+    expect(sessionStorage.getItem(ATTEMPT_KEY)).toBe("another redirect's proof");
+  });
+
+  it("not for a caller who gives up as the attempt is saved", async () => {
+    const controller = new AbortController();
+    const attemptStorage = {
+      getItem: (key: string) => sessionStorage.getItem(key),
+      removeItem: (key: string) => sessionStorage.removeItem(key),
+      setItem: (key: string, value: string) => {
+        sessionStorage.setItem(key, value);
+        controller.abort();
+      },
+    } as Storage;
+    const page = setup({ attemptStorage });
+    page.google.block();
+    await expect(
+      page.client.signInWithGoogle({ mode: "popup", container: page.container, signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "sign-in-cancelled" });
+    expect(page.redirect).not.toHaveBeenCalled();
   });
 
   it("only when asked to", async () => {

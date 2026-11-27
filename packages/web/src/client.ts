@@ -271,12 +271,8 @@ export function createCardeaClient(configuration: CardeaConfig, options: ClientO
   async function leaveFor(provider: Provider, returnTo?: string, signal?: AbortSignal): Promise<void> {
     const here = new URL(window.location.href);
     const target = returnTo ?? `${here.pathname}${here.search}${here.hash}`;
-    const url = await startAttempt(config, provider, here, target, attemptStorage, store.generation());
-    // Given up while this was being prepared: no attempt is left behind.
-    if (signal?.aborted) {
-      discardAttempt(config, attemptStorage);
-      throw signal.reason;
-    }
+    const url = await startAttempt(config, provider, here, target, attemptStorage, store.generation(), signal);
+    if (signal?.aborted) throw signal.reason;
     redirect(url);
   }
 
