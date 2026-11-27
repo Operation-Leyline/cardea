@@ -9,7 +9,7 @@ use std::{
 use aws_sdk_dynamodb::types::AttributeValue as Av;
 
 use super::*;
-use crate::mail::{Counter, DAILY_CAP, RESET_DAILY_CAP, RefreshingKeySource};
+use crate::mail::{Counter, DAILY_CAP, DEFAULT_MAX_KEY_AGE, RESET_DAILY_CAP, RefreshingKeySource};
 use crate::testing::{
     ddb,
     pending_change::{self, NEW, OBSERVED, OLD, VERIFIED},
@@ -528,14 +528,13 @@ async fn a_failed_refresh_sends_with_the_last_key() {
     assert_eq!(rows(&ddb, &table).await.len(), 3);
 }
 
-/// A maximum age of nothing lets no key outlive the call that read it.
+/// The clock is moved only between messages, while nothing waits on the table.
 #[tokio::test]
 async fn past_the_bound_nothing_is_sent() {
     let ddb = ddb::client();
     let table = ddb::table(&ddb, "partitionKey", Some("sortKey")).await;
     let secret = Secret::holding(1);
-    let source =
-        RefreshingKeySource::new(secret.clone(), Duration::ZERO).with_max_age(Duration::ZERO);
+    let source = RefreshingKeySource::new(secret.clone(), Duration::ZERO);
     let sender = EmailSender::with_key_source(ddb.clone(), table.clone(), source, Plain);
     let outbox = Outbox::default();
     sender
@@ -543,6 +542,9 @@ async fn past_the_bound_nothing_is_sent() {
         .await
         .unwrap();
     secret.fail();
+    tokio::time::pause();
+    tokio::time::advance(DEFAULT_MAX_KEY_AGE).await;
+    tokio::time::resume();
     let error = sender
         .send(&outbox, &event("SignUp", "2"), "r")
         .await

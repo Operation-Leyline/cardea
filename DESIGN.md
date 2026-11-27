@@ -187,6 +187,10 @@ pub trait BudgetKeySource: Send + Sync {
   needs whatever access the source needs instead of the grant on that secret.
   Without one, everything is as above, and `EmailSender::new` still keeps the
   first key it gets.
+- **The CDK construct** is the same either way: with a custom email sender it
+  creates the secret unless given one, and wires the sender function to read it
+  as in [CDK construct](#cdk-construct). A source may read that secret
+  (`mailBudgetKey`); one that reads elsewhere leaves it unused.
 - **Asked for every message.** The sender keeps no key from a source given this
   way, and one message uses one key for its counter and its marker. Caching is
   the source's job.
@@ -197,9 +201,10 @@ pub trait BudgetKeySource: Send + Sync {
   fall back to, a read unanswered after 2 seconds has failed.
 - **The bound.** A key is given out only while it is younger than a maximum age,
   one hour unless `with_max_age` says otherwise, counted from the start of the
-  read that gave it. After that the source fails closed until a read succeeds. A
-  maximum shorter than the interval also shortens the interval. A source that
-  caches adds its own cache's age.
+  read that gave it, so a read that itself lasts that long has failed. After
+  that the source fails closed until a read succeeds. A maximum shorter than the
+  interval also shortens the interval. A source that caches adds its own cache's
+  age.
 
 ### Rotation
 

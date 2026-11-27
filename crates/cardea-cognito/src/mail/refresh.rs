@@ -20,6 +20,11 @@ pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
 #[error("the mail budget key was not read again in time")]
 struct TimedOut;
 
+/// Why a key that a read did give is refused.
+#[derive(Debug, thiserror::Error)]
+#[error("the mail budget key reached its maximum age before its read ended")]
+struct Outlived;
+
 /// Keeps another source's key and reads it again once it is `interval` old, so
 /// that a changed key takes effect in a running function.
 ///
@@ -32,8 +37,9 @@ struct TimedOut;
 ///
 /// **The bound.** A key is not given out once its age reaches the maximum
 /// ([`DEFAULT_MAX_KEY_AGE`], or [`with_max_age`](Self::with_max_age)), counted
-/// from the start of the read that gave it. From then on `load` fails, and
-/// nothing is sent, until a read succeeds. So after the source's key changes,
+/// from the start of the read that gave it; a read that itself lasts that long
+/// has failed. From then on `load` fails, and nothing is sent, until a read
+/// succeeds. So after the source's key changes,
 /// the old one is given out for less than `interval` while reads succeed, and
 /// for less than the maximum age while they fail. A source that caches adds its
 /// own cache's age to both. A maximum shorter than `interval` also shortens the
@@ -114,6 +120,14 @@ impl<S: BudgetKeySource> BudgetKeySource for RefreshingKeySource<S> {
             // Nothing to fall back to: wait as long as the caller does.
             self.source.load().await
         };
+        // A host suspended during a read can hand over an answer of any age.
+        let read = read.and_then(|key| {
+            if started.age() < self.max_age {
+                Ok(key)
+            } else {
+                Err(KeyError::Read(Box::new(Outlived)))
+            }
+        });
         match read {
             Ok(key) => {
                 *held = Some(Held {

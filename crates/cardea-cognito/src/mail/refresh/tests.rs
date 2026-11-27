@@ -198,6 +198,22 @@ async fn the_time_limit_applies_only_while_there_is_a_key_to_fall_back_to() {
     assert_eq!(given(&key).await, 2);
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_read_that_lasts_the_maximum_age_gives_no_key() {
+    let source = Source::answering(Answer::Slow(1, MAX_AGE));
+    let key = refreshing(&source);
+    // With no key yet, and again with one that has aged out.
+    assert!(matches!(key.load().await, Err(KeyError::Read(_))));
+    source.set(Answer::Key(1));
+    assert_eq!(given(&key).await, 1);
+    source.set(Answer::Slow(2, MAX_AGE));
+    advance(MAX_AGE).await;
+    assert!(matches!(key.load().await, Err(KeyError::Read(_))));
+    // Neither answer was kept.
+    source.set(Answer::Fail);
+    assert!(key.load().await.is_err());
+}
+
 /// The age counts from when the read began, not from its answer.
 #[tokio::test(start_paused = true)]
 async fn a_key_ages_from_the_start_of_its_read() {
