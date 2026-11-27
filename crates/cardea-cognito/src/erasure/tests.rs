@@ -91,8 +91,8 @@ async fn every_row_of_the_user_goes_and_no_one_elses() {
     }
 }
 
-/// A Leyline account at adoption: the pool and the bindings know its identity,
-/// and there is no list.
+/// An account from before the pool used Cardea: the pool and the bindings know
+/// its identity, and there is no list.
 #[tokio::test]
 async fn an_identity_only_the_pool_lists_is_recorded_then_erased() {
     let f = fixture().await;

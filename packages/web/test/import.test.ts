@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cognitoSdkSession,
   createCardeaClient,
-  leylineGoogleSession,
+  providerSession,
   type CardeaConfig,
   type ClientOptions,
   type SessionEvent,
@@ -10,7 +10,9 @@ import {
 import { authenticationResult, CONFIG, deferred, GENERATION_KEY, installFakeCognito, ISSUER, issueTokens, otherTabWrites, SESSION_KEY, storedSession, type TokenOptions } from "./fakes/cognito.js";
 
 const SDK = `CognitoIdentityServiceProvider.${CONFIG.clientId}`;
-const GOOGLE = `leyline.google.session.${CONFIG.clientId}.${ISSUER}`;
+const GOOGLE_PATTERN = "example-app.google.session.{clientId}.{issuer}";
+const GOOGLE = `example-app.google.session.${CONFIG.clientId}.${ISSUER}`;
+const googleSource = () => providerSession({ key: GOOGLE_PATTERN });
 const EXPIRED = { expiresIn: -3600 };
 
 /** What `amazon-cognito-identity-js` leaves in storage after a sign-in. */
@@ -26,7 +28,7 @@ async function saveSdk(options: TokenOptions & { prefix?: string; clientId?: str
   return tokens;
 }
 
-/** The JSON record leyline-console and yoru-web keep for a Google sign-in. */
+/** The JSON record an app's own code keeps for a provider sign-in. */
 async function saveHosted(key: string, options: TokenOptions & { recorded?: string } = {}) {
   const tokens = await issueTokens(options);
   localStorage.setItem(key, JSON.stringify({ ...tokens, subject: options.recorded ?? options.subject ?? "ada" }));
@@ -40,12 +42,12 @@ const SOURCES = {
     method: "password",
   },
   "the SDK layout under a prefix": {
-    source: cognitoSdkSession({ prefix: "yoru.auth." }),
-    save: (options?: TokenOptions) => saveSdk({ ...options, prefix: "yoru.auth." }),
+    source: cognitoSdkSession({ prefix: "example-app.auth." }),
+    save: (options?: TokenOptions) => saveSdk({ ...options, prefix: "example-app.auth." }),
     method: "password",
   },
-  "leyline-console's Google session": {
-    source: leylineGoogleSession(),
+  "a Google session record": {
+    source: googleSource(),
     save: (options?: TokenOptions) => saveHosted(GOOGLE, options),
     method: "Google",
   },
@@ -284,7 +286,7 @@ describe("unreadable old values", () => {
     async (value) => {
       installFakeCognito();
       localStorage.setItem(GOOGLE, value);
-      const { client } = setup([leylineGoogleSession()]);
+      const { client } = setup([googleSource()]);
       await expect(client.start()).resolves.toEqual({});
       expect(client.getState().status).toBe("signedOut");
       expect(keys()).toEqual([GOOGLE]);
@@ -310,9 +312,34 @@ describe("unreadable old values", () => {
   it("refuses a Google record whose subject is not the tokens'", async () => {
     installFakeCognito();
     await saveHosted(GOOGLE, { recorded: "mallory" });
-    const { client } = setup([leylineGoogleSession()]);
+    const { client } = setup([googleSource()]);
     await expect(client.start()).resolves.toEqual({});
     expect(client.getState().status).toBe("signedOut");
+  });
+});
+
+describe("a configured provider session", () => {
+  const fields = { idToken: "id", accessToken: "access", refreshToken: "refresh", subject: "user" };
+
+  it("reads the key a function names, with its own property names and provider", async () => {
+    installFakeCognito();
+    const tokens = await issueTokens();
+    const record = { id: tokens.id_token, access: tokens.access_token, refresh: tokens.refresh_token, user: "ada" };
+    localStorage.setItem(`session:${CONFIG.clientId}`, JSON.stringify(record));
+    const source = providerSession({ key: ({ clientId }) => `session:${clientId}`, fields, provider: "Apple" });
+    const { client } = setup([source]);
+    await client.start();
+    expect(client.getState().session).toMatchObject({ subject: "ada", method: "Apple" });
+    expect(keys()).toEqual([SESSION_KEY]);
+  });
+
+  it("keeps the default names of the properties it is not given", async () => {
+    installFakeCognito();
+    const { id_token, ...rest } = await issueTokens();
+    localStorage.setItem(GOOGLE, JSON.stringify({ ...rest, jwt: id_token, subject: "ada" }));
+    const { client } = setup([providerSession({ key: GOOGLE_PATTERN, fields: { idToken: "jwt" } })]);
+    await client.start();
+    expect(client.getState().session).toMatchObject({ subject: "ada", method: "Google" });
   });
 });
 
@@ -320,10 +347,10 @@ describe("which old session is taken", () => {
   it("never reads keys named for another client or issuer", async () => {
     const cognito = installFakeCognito();
     await saveSdk({ clientId: "other-client" });
-    await saveHosted(`leyline.google.session.other-client.${ISSUER}`);
-    await saveHosted(`leyline.google.session.${CONFIG.clientId}.https://other.example.test`);
+    await saveHosted(`example-app.google.session.other-client.${ISSUER}`);
+    await saveHosted(`example-app.google.session.${CONFIG.clientId}.https://other.example.test`);
     const before = keys();
-    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    const { client } = setup([googleSource(), cognitoSdkSession()]);
     await client.start();
     expect(client.getState().status).toBe("signedOut");
     expect(cognito.fetcher).not.toHaveBeenCalled();
@@ -336,7 +363,7 @@ describe("which old session is taken", () => {
     await saveSdk();
     await saveSdk({ user: "user-earlier" });
     await saveSdk({ clientId: "other-client" });
-    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    const { client } = setup([googleSource(), cognitoSdkSession()]);
     await client.start();
     expect(client.getState().session).toMatchObject({ subject: "grace", method: "Google" });
     expect(keys().filter((key) => !key.includes("other-client"))).toEqual([SESSION_KEY]);
@@ -359,7 +386,7 @@ describe("which old session is taken", () => {
     const before = keys();
     // Only the first request for the keys fails.
     cognito.fetcher.mockImplementationOnce(answer);
-    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    const { client } = setup([googleSource(), cognitoSdkSession()]);
     await expect(client.start()).resolves.toMatchObject({ error: { code: "refresh-failed" } });
     expect(client.getState().status).toBe("signedOut");
     expect(keys()).toEqual(before);
@@ -369,21 +396,21 @@ describe("which old session is taken", () => {
     installFakeCognito();
     await saveHosted(GOOGLE, { foreignKey: true });
     await saveSdk();
-    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    const { client } = setup([googleSource(), cognitoSdkSession()]);
     await client.start();
     expect(client.getState().session).toMatchObject({ subject: "ada", method: "password" });
   });
 
-  it("takes yoru-web's Google tokens over the SDK's stale copy", async () => {
+  it("takes a prefixed app's Google tokens over the SDK's stale copy", async () => {
     const cognito = installFakeCognito();
-    await saveSdk({ prefix: "yoru.auth.", ...EXPIRED });
-    const current = await saveHosted("yoru.auth.googleSession");
-    localStorage.setItem("yoru.auth.activeSubject", "ada");
-    const { client } = setup([cognitoSdkSession({ prefix: "yoru.auth." })]);
+    await saveSdk({ prefix: "example-app.auth.", ...EXPIRED });
+    const current = await saveHosted("example-app.auth.googleSession");
+    localStorage.setItem("example-app.auth.activeSubject", "ada");
+    const { client } = setup([cognitoSdkSession({ prefix: "example-app.auth." })]);
     await client.start();
     expect(saved()).toMatchObject({ method: "Google", idToken: current.id_token });
     expect(refreshRequests(cognito)).toBe(0);
-    expect(keys()).toEqual([SESSION_KEY, "yoru.auth.activeSubject"].sort());
+    expect(keys()).toEqual([SESSION_KEY, "example-app.auth.activeSubject"].sort());
   });
 
   it("honours the SDK's note that this device's clock is ahead", async () => {
@@ -399,7 +426,7 @@ describe("which old session is taken", () => {
   it("does not try a Google session without a hosted domain to refresh it", async () => {
     installFakeCognito();
     await saveHosted(GOOGLE);
-    const { client } = setup([leylineGoogleSession()], {}, { loginDomain: "" });
+    const { client } = setup([googleSource()], {}, { loginDomain: "" });
     await client.start();
     expect(client.getState().status).toBe("signedOut");
     expect(keys()).toEqual([GOOGLE]);
@@ -411,7 +438,7 @@ describe("which old session is taken", () => {
     await saveHosted(GOOGLE, bare);
     await saveSdk({ ...bare, ...EXPIRED });
     refreshWith(cognito, async () => Response.json(await issueTokens(bare)));
-    const { client } = setup([leylineGoogleSession(), cognitoSdkSession()]);
+    const { client } = setup([googleSource(), cognitoSdkSession()]);
     await client.start();
     expect(client.getState().session).toMatchObject({ method: "password", email: null });
   });

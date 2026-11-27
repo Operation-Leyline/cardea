@@ -106,21 +106,33 @@ account first.
 List where the app's earlier sign-in code kept its session:
 
 ```ts
-import { cognitoSdkSession, leylineGoogleSession } from "@operation-leyline/cardea-web";
+import { cognitoSdkSession, providerSession } from "@operation-leyline/cardea-web";
 
-// leyline-console
-importSession: [leylineGoogleSession(), cognitoSdkSession()],
-// yoru-web
-importSession: [cognitoSdkSession({ prefix: "yoru.auth." })],
-// pigeon-web
-importSession: [cognitoSdkSession()],
+// Google sessions in a record of the app's own, password sessions from the SDK
+importSession: [
+  providerSession({ key: "example-app.google.session.{clientId}.{issuer}" }),
+  cognitoSdkSession(),
+],
+// the SDK behind a storage wrapper that adds a prefix
+importSession: [cognitoSdkSession({ prefix: "example-app.auth." })],
 ```
 
 | Source | Reads |
 | --- | --- |
 | `cognitoSdkSession()` | `amazon-cognito-identity-js` default storage: `CognitoIdentityServiceProvider.<clientId>.…` |
-| `cognitoSdkSession({ prefix })` | The same layout behind `prefix`, and `<prefix>googleSession` (yoru-web's Google sign-in) |
-| `leylineGoogleSession()` | `leyline.google.session.<clientId>.<issuer>` |
+| `cognitoSdkSession({ prefix })` | The same layout behind `prefix`, and a Google sign-in's record at `<prefix>googleSession` |
+| `providerSession({ key })` | A provider sign-in's record at `key` |
+
+A record is one JSON object holding `id_token`, `access_token`, `refresh_token`
+and `subject`, all non-empty strings. `providerSession` takes:
+
+| Option | Meaning |
+| --- | --- |
+| `key` | The storage key: a pattern in which `{clientId}` and `{issuer}` stand for this client's, or a function of `{ clientId, issuer }` |
+| `fields` | Other property names, for any of `idToken`, `accessToken`, `refreshToken` and `subject` |
+| `provider` | `"Google"` (the default) or `"Apple"` |
+
+The key is removed once the session is taken over, and on sign-in and sign-out.
 
 They are read once per page load, in order, only when there is no session of
 this package's own: by `start`, or by a token getter called before it. Getters

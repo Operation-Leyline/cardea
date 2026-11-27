@@ -1,5 +1,5 @@
 {
-  "note": "One spelling per row maps to one person key. cardea-core's person_key runs these rows. Leyline's tools/migrations/person_key.py runs the same rows in its own repository.",
+  "note": "One spelling per row maps to one person key. cardea-core's person_key runs these rows. Another implementation of the rule, such as a product's migration tool, can run the same rows.",
   "folds": [
     ["owner@gmail.com", "owner@gmail.com"],
     ["Owner@Gmail.COM", "owner@gmail.com"],

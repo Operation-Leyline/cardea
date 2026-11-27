@@ -1,4 +1,4 @@
-//! One provider's signing keys, cached. Moved from Leyline's JWKS cache.
+//! One provider's signing keys, cached.
 //!
 //! Providers rotate their keys. The cache has a lifetime, and an unknown `kid`
 //! is read as a rotation: it forces a refetch, no more often than

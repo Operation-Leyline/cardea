@@ -1,14 +1,15 @@
-//! Challenges Leyline wrote before the switch: no `provider` attribute.
+//! Challenges written by earlier deployments, before provider names were
+//! stored: no `provider` attribute.
 
 use cardea_core::{Error, Provider};
 
 use super::*;
 
-const NONCE: &str = "leyline-nonce";
+const NONCE: &str = "earlier-nonce";
 
-/// Write a row as Leyline's `CreateGoogleIdentityLink` does.
-async fn leyline_challenge(f: &Link, extra: &[(&str, &str)]) -> String {
-    let link_id = digest("leyline-client-token");
+/// Write a row as an earlier deployment's `CreateGoogleIdentityLink` does.
+async fn unnamed_challenge(f: &Link, extra: &[(&str, &str)]) -> String {
+    let link_id = digest("earlier-client-token");
     let time = now();
     let mut request = f
         .fixture
@@ -31,9 +32,9 @@ async fn leyline_challenge(f: &Link, extra: &[(&str, &str)]) -> String {
 }
 
 #[tokio::test]
-async fn a_leyline_challenge_completes_as_googles() {
+async fn a_challenge_without_a_provider_completes_as_googles() {
     let f = Link::new(Provider::Google).await;
-    let link_id = leyline_challenge(&f, &[]).await;
+    let link_id = unnamed_challenge(&f, &[]).await;
     let proof = f.token(NONCE, SUBJECT);
 
     assert_eq!(
@@ -47,9 +48,9 @@ async fn a_leyline_challenge_completes_as_googles() {
 }
 
 #[tokio::test]
-async fn a_leyline_challenge_takes_no_other_providers_proof() {
+async fn a_challenge_without_a_provider_takes_no_other_providers_proof() {
     let f = Link::new(Provider::Apple).await;
-    let link_id = leyline_challenge(&f, &[]).await;
+    let link_id = unnamed_challenge(&f, &[]).await;
     let proof = f.token(NONCE, SUBJECT);
     assert_eq!(
         f.complete(&f.alice, &link_id, &proof).await,
@@ -59,11 +60,11 @@ async fn a_leyline_challenge_takes_no_other_providers_proof() {
 }
 
 #[tokio::test]
-async fn a_leyline_receipt_replays() {
+async fn a_receipt_without_a_provider_replays() {
     let f = Link::new(Provider::Google).await;
     let proof = f.token(NONCE, SUBJECT);
     let hash = digest(&proof);
-    let link_id = leyline_challenge(
+    let link_id = unnamed_challenge(
         &f,
         &[
             ("tokenHash", &hash),
@@ -82,7 +83,7 @@ async fn a_leyline_receipt_replays() {
 #[tokio::test]
 async fn a_challenge_for_an_unknown_provider_is_invalid() {
     let f = Link::new(Provider::Google).await;
-    let link_id = leyline_challenge(&f, &[("provider", "Unknown")]).await;
+    let link_id = unnamed_challenge(&f, &[("provider", "Unknown")]).await;
     let proof = f.token(NONCE, SUBJECT);
     assert_eq!(
         f.complete(&f.alice, &link_id, &proof).await,

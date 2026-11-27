@@ -5,9 +5,9 @@ import { isText, readTokenJson, type LegacySessionSource } from "./source.js";
  * `CognitoIdentityServiceProvider.<clientId>.…`, optionally behind a key
  * `prefix` that the app's own storage wrapper added.
  *
- * With a prefix, `<prefix>googleSession` is also read. yoru-web keeps the
- * current tokens of a Google sign-in there (the SDK's copy goes stale, and
- * only the hosted token endpoint refreshes them).
+ * With a prefix, `<prefix>googleSession` is also read, as the current tokens of
+ * a Google sign-in. An app keeps them apart because the SDK's copy goes stale:
+ * only the hosted token endpoint refreshes them.
  */
 export function cognitoSdkSession({ prefix = "" }: { prefix?: string } = {}): LegacySessionSource {
   const root = (clientId: string) => `${prefix}CognitoIdentityServiceProvider.${clientId}.`;
