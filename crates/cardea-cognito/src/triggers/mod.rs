@@ -88,7 +88,8 @@ pub async fn handle_challenge(
     keys: &(impl TicketKeySource + ?Sized),
     payload: Value,
 ) -> Result<Value, TriggerError> {
-    let answer = async {
+    // Boxed for the reason `handle` boxes its dispatch.
+    let answer = Box::pin(async {
         let source = payload["triggerSource"].as_str().unwrap_or_default();
         if source.starts_with("DefineAuthChallenge_") {
             custom_auth::define(payload)
@@ -99,7 +100,7 @@ pub async fn handle_challenge(
         } else {
             Err(TriggerError::Unsupported)
         }
-    };
+    });
     tokio::time::timeout(DEADLINE, answer)
         .await
         .map_err(|_| TriggerError::TimedOut)?
