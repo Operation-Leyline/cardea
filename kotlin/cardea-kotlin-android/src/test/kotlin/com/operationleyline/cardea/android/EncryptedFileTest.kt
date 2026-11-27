@@ -54,7 +54,15 @@ class EncryptedFileTest {
         val bytes = file().readBytes()
         file().writeBytes(bytes.copyOf(bytes.size - 1))
         assertNull(EncryptedFile(file()) { key }.read())
-        for (junk in listOf(ByteArray(0), byteArrayOf(9, 12, 1), byteArrayOf(1, 127, 1))) {
+        val junkFiles = listOf(
+            ByteArray(0),
+            byteArrayOf(9, 12) + ByteArray(40),
+            byteArrayOf(1, 127, 1),
+            // Another IV length, and less than a whole tag.
+            byteArrayOf(1, 5) + ByteArray(40),
+            byteArrayOf(1, 12) + ByteArray(12 + 15),
+        )
+        for (junk in junkFiles) {
             file().writeBytes(junk)
             assertNull(EncryptedFile(file()) { key }.read())
         }

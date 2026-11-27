@@ -36,7 +36,8 @@ public class CardeaBrowserActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
+        // The launch's extras stay: they name the address that was opened.
+        setIntent(Intent(this.intent).setData(intent.data))
     }
 
     override fun onResume() {

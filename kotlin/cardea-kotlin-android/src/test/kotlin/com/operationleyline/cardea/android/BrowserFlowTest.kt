@@ -146,6 +146,14 @@ class BrowserFlowTest {
     }
 
     @Test
+    fun `stops awaiting the address once the answer has arrived`() {
+        val screen = waiting()
+        screen.pause().newIntent(receive(REDIRECT)).resume()
+        assertTrue(screen.get().isFinishing)
+        assertNull(receive(REDIRECT))
+    }
+
+    @Test
     fun `awaits a sign-out at its own address`() {
         waiting(SIGN_OUT)
         assertNull(receive(REDIRECT))

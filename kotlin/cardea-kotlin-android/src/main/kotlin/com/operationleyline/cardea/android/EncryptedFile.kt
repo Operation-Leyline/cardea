@@ -12,6 +12,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val FORMAT: Byte = 1
+
+/** The format byte and the IV length byte. */
+private const val HEADER_BYTES = 2
+private const val IV_BYTES = 12
 private const val TRANSFORMATION = "AES/GCM/NoPadding"
 private const val TAG_BITS = 128
 
@@ -37,13 +41,15 @@ internal class EncryptedFile(
         // A file that exists but cannot be opened is not the same as no file.
         if (!file.exists()) return@withContext null
         val bytes = file.readBytes()
-        val ivLength = bytes.getOrNull(1)?.toInt() ?: 0
-        if (bytes.getOrNull(0) != FORMAT || ivLength <= 0 || bytes.size <= 2 + ivLength) return@withContext null
+        // Checked here because a Keystore cipher fails in its own ways on other sizes.
+        val whole = bytes.size >= HEADER_BYTES + IV_BYTES + TAG_BITS / 8
+        if (!whole || bytes[0] != FORMAT || bytes[1].toInt() != IV_BYTES) return@withContext null
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, bytes, 2, ivLength))
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, bytes, HEADER_BYTES, IV_BYTES))
         cipher.updateAAD(file.name.toByteArray(Charsets.UTF_8))
         try {
-            cipher.doFinal(bytes, 2 + ivLength, bytes.size - 2 - ivLength).toString(Charsets.UTF_8)
+            val start = HEADER_BYTES + IV_BYTES
+            cipher.doFinal(bytes, start, bytes.size - start).toString(Charsets.UTF_8)
         } catch (_: AEADBadTagException) {
             null
         }
