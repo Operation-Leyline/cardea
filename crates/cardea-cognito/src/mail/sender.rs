@@ -5,11 +5,10 @@ use aws_sdk_dynamodb::Client as Dynamo;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::OnceCell;
 
 use super::{
     BudgetKey, BudgetKeySource, Code, KeyError, MailDelivery, MailMessage, MessageKind, Refusal,
-    Template, budget,
+    Template, budget, once::ReadOnce,
 };
 use crate::{cause::cause, directory::now, email_change, triggers::ProductError};
 
@@ -67,13 +66,12 @@ pub enum MailError {
 }
 
 /// What a delivery needs besides the product: the budget's table and key, and
-/// what opens Cognito's codes. Keep one for the life of the function: it reads
-/// the budget key once.
+/// what opens Cognito's codes. Keep one for the life of the function, so that
+/// a key it has read is not read for each message.
 pub struct EmailSender {
     ddb: Dynamo,
     budget_table: String,
     key_source: Box<dyn BudgetKeySource>,
-    key: OnceCell<BudgetKey>,
     decryptor: Box<dyn CodeDecryptor>,
 }
 
@@ -115,31 +113,40 @@ fn delivery_key(event: &Value, template: &Template, request_id: &str) -> String 
 
 impl EmailSender {
     /// A sender counting against `budget_table`, in rows named under the key
-    /// `key` gives.
+    /// `key` gives. It asks for the key when the first message needs it and
+    /// keeps it; after a failure it asks again for the next message.
     pub fn new(
         ddb: Dynamo,
         budget_table: String,
         key: impl BudgetKeySource + 'static,
         decryptor: impl CodeDecryptor + 'static,
     ) -> Self {
+        Self::with_key_source(ddb, budget_table, ReadOnce::new(key), decryptor)
+    }
+
+    /// A sender that asks `source` for the key for every message and keeps
+    /// none itself. Caching is the source's: wrap one that reads a secret each
+    /// time in a [`RefreshingKeySource`](super::RefreshingKeySource).
+    pub fn with_key_source(
+        ddb: Dynamo,
+        budget_table: String,
+        source: impl BudgetKeySource + 'static,
+        decryptor: impl CodeDecryptor + 'static,
+    ) -> Self {
         Self {
             ddb,
             budget_table,
-            key_source: Box::new(key),
-            key: OnceCell::new(),
+            key_source: Box::new(source),
             decryptor: Box::new(decryptor),
         }
     }
 
-    /// The budget key, read on first use. A failure is not remembered.
-    async fn budget_key(&self) -> Result<&BudgetKey, MailError> {
-        self.key
-            .get_or_try_init(|| self.key_source.load())
-            .await
-            .map_err(|error| {
-                tracing::error!(cause = %cause(&error), "mail budget key unavailable");
-                MailError::BudgetKey(error)
-            })
+    /// The key to count this message under.
+    async fn budget_key(&self) -> Result<BudgetKey, MailError> {
+        self.key_source.load().await.map_err(|error| {
+            tracing::error!(cause = %cause(&error), "mail budget key unavailable");
+            MailError::BudgetKey(error)
+        })
     }
 
     /// Send the message a `CustomEmailSender_*` event asks for. The answer is
@@ -187,7 +194,7 @@ impl EmailSender {
             budget::spend(
                 &self.ddb,
                 &self.budget_table,
-                budget_key,
+                &budget_key,
                 recipient,
                 &key,
                 counter,

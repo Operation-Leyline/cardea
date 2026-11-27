@@ -26,6 +26,9 @@
 //! the custom email sender trigger here, so that no code for a new address is
 //! ever sent.
 //! The handler logs through `tracing`; the product installs the subscriber.
+//! Mail events read the budget key from Secrets Manager unless the product
+//! supplies it ([`TriggerHandler::with_budget_key_source`], feature
+//! `email-sender`).
 //!
 //! The function reads `IDENTITIES_TABLE` (partition key `identityKey`) and
 //! needs read and write on it (`DeleteItem` included: a sign-in may finish an

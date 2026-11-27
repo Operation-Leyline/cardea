@@ -156,33 +156,90 @@ can.
   by hand).
 - **Configuration.** `MAIL_BUDGET_KEY_SECRET` holds the secret's name or ARN.
   Only the sender function needs it, and `secretsmanager:GetSecretValue` on it.
-- **Once per cold start.** A function instance reads the secret for its first
-  mail event, keeps the key for as long as it lives, and computes the HMACs
-  itself. A failed read is not kept: the next event reads again.
+- **Once per cold start**, by default. A function instance reads the secret for
+  its first mail event, keeps the key for as long as it lives, and computes the
+  HMACs itself. A failed read is not kept: the next event reads again.
 - **Fail closed.** Without the variable, or with a secret that cannot be read or
-  is not a key, no message is sent, the event fails and the cause is logged, as
-  when the counter cannot be written. This covers the messages the budget does
-  not count (temporary passwords and security alerts) too. There is no unkeyed
-  fallback.
+  is not a key, or when the product's own source gives no key, no message is
+  sent, the event fails and the cause is logged, as when the counter cannot be
+  written. This covers the messages the budget does not count (temporary
+  passwords and security alerts) too. There is no unkeyed fallback.
+
+### A product's own key source
+
+Some products read every secret through a secrets layer of their own, and read
+it again on a fixed interval so that a change takes effect without a deploy.
+The key therefore comes from a trait:
+
+```rust
+#[async_trait]
+pub trait BudgetKeySource: Send + Sync {
+    /// The key to name rows under now.
+    async fn load(&self) -> Result<BudgetKey, KeyError>;
+}
+```
+
+- **Giving one.** `TriggerHandler::with_budget_key_source` for the trigger
+  function (then `serve`, in place of `triggers::run`);
+  `EmailSender::from_env_with_key_source` (then `serve`) for a sender function
+  of its own; `EmailSender::with_key_source` for a sender built from the
+  caller's clients. `MAIL_BUDGET_KEY_SECRET` is then not read, and the function
+  needs whatever access the source needs instead of the grant on that secret.
+  Without one, everything is as above, and `EmailSender::new` still keeps the
+  first key it gets.
+- **The CDK construct** is the same either way: with a custom email sender it
+  creates the secret unless given one, and wires the sender function to read it
+  as in [CDK construct](#cdk-construct). A source may read that secret
+  (`mailBudgetKey`); one that reads elsewhere leaves it unused.
+- **Asked for every message.** The sender keeps no key from a source given this
+  way, and one message uses one key for its counter and its marker. Caching is
+  the source's job.
+- **`RefreshingKeySource::new(source, interval)`** does that caching. The first
+  call to find the key `interval` old reads the source again; nothing runs in
+  the background, since Lambda stops an idle instance's work. A read that fails
+  keeps the last good key and the next call tries again. While there is a key to
+  fall back to, a read unanswered after 2 seconds has failed.
+- **The bound.** A key is given out only while it is younger than a maximum age,
+  one hour unless `with_max_age` says otherwise, counted from the start of the
+  read that gave it, so a read that itself lasts that long has failed. After
+  that the source fails closed until a read succeeds. A maximum shorter than the
+  interval also shortens the interval. A source that caches adds its own cache's
+  age.
+
+### Rotation
 
 **Rotation resets the day's counters** (there is no previous key). A new key
 names new rows, so on the day of a change:
 
-- a mailbox's counts start again, and it can be sent up to its cap under each
-  key in use that day: a running instance keeps the old key until Lambda
-  replaces it, while new instances count under the new one;
+- a mailbox's counts start at zero on the new rows, and it can be sent up to its
+  cap under each key in use that day;
 - a retry of a message counted under the old key is counted again.
 
-Reading a previous key as well could carry counts across, but not exactly: a
-condition covers one row, so the cap could no longer be one conditional write
-over the old counter and the new one, and instances that hold only the old key
-would go on counting on the old rows until replaced. Keeping the count exact
-would take a rollout in two steps. A key changes rarely and deliberately, and a
-reset allows no more than another cap per key, so the library does not do this.
-Do not schedule automatic rotation. To rotate, store the new value, then change
-the sender function's configuration so that every instance is replaced.
+How long both keys are in use depends on the source:
 
-**Moving from unkeyed rows.** Rows from earlier deployments are named
+- **Read once** (the default): a running instance keeps the old key until Lambda
+  replaces it, while new instances count under the new one. To rotate, store the
+  new value, then change the sender function's configuration so that every
+  instance is replaced.
+- **Refreshing:** storing the new value is the whole rotation. Each instance
+  moves with its first message after its key is `interval` old, so no message
+  that long after the change uses the old key while reads succeed, and none the
+  maximum age after it in any case. Between those moments instances count on
+  different rows. An instance never returns to the old key if its source does
+  not.
+
+Reading a previous key as well, which a refreshing source could supply, could
+carry counts across, but not exactly: a condition covers one row, so the cap
+could no longer be one conditional write over the old counter and the new one,
+and instances not yet holding the new key would go on counting on the old rows
+only. Keeping the count exact would take a rollout in two steps. A key changes
+rarely and deliberately, and a reset allows no more than another cap per key, so
+the library does not do this. Each change allows that much again, so do not
+schedule automatic rotation, with either kind of source.
+
+### Moving from unkeyed rows
+
+Rows from earlier deployments are named
 `MAIL#{sha256}` and `DELIVERY#{sha256}`. Keyed rows are named `MAILK#` and
 `DELIVERYK#`, so the two never collide, and the library neither reads nor writes
 the old ones. They lapse through their TTL (`expiresAt`, two days after the

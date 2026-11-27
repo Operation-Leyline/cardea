@@ -10,6 +10,8 @@
 //! Anything else is refused: there is no unkeyed or default key to fall back
 //! to.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -62,12 +64,30 @@ impl std::fmt::Debug for BudgetKey {
     }
 }
 
-/// Where a sender gets its key. It asks once and keeps the answer for as long
-/// as it lives; after a failure it asks again for the next message.
+/// Where a sender gets its key: Secrets Manager, or a product's own secrets
+/// layer.
+///
+/// How often a source is asked depends on how the sender was given it.
+/// [`EmailSender::new`](super::EmailSender::new) asks until it has a key and
+/// keeps that one for as long as it lives.
+/// [`EmailSender::with_key_source`](super::EmailSender::with_key_source), and
+/// what takes a source for a Lambda function, ask for every message, so that a
+/// changed key takes effect in a running function. A source that is slow or
+/// dear to read then caches, as
+/// [`RefreshingKeySource`](super::RefreshingKeySource) does.
 #[async_trait]
 pub trait BudgetKeySource: Send + Sync {
-    /// The product's key, or why there is none.
+    /// The key to name rows under now, or why there is none. Without one no
+    /// message is sent.
     async fn load(&self) -> Result<BudgetKey, KeyError>;
+}
+
+/// A source the caller keeps a handle to.
+#[async_trait]
+impl<S: BudgetKeySource + ?Sized> BudgetKeySource for Arc<S> {
+    async fn load(&self) -> Result<BudgetKey, KeyError> {
+        (**self).load().await
+    }
 }
 
 /// A key already in hand.
