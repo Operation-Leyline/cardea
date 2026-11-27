@@ -1,5 +1,5 @@
-//! Wire freeze: the directory rows read and write exactly as Leyline's live
-//! table holds them. The expected items are literals.
+//! Wire freeze: the directory rows read and write exactly as the tables of
+//! earlier deployments hold them. The expected items are literals.
 
 use aws_sdk_dynamodb::types::AttributeValue as Av;
 use cardea_core::{EmailOwner, Provider, User};
@@ -44,7 +44,7 @@ fn user() -> User {
     }
 }
 
-/// A mailbox row once provisioning set its user, as Leyline's table holds it.
+/// A mailbox row once provisioning set its user, as an existing table holds it.
 fn email_item() -> Item {
     item(&[
         ("identityKey", s("EMAIL#alice@example.com")),
@@ -171,7 +171,7 @@ fn a_link_row_keys_its_user_and_link_id() {
         status: Some("complete".into()),
         provider: None,
     };
-    // A challenge Leyline wrote names no provider.
+    // A challenge from an earlier deployment names no provider.
     assert_eq!(LinkRow::from_item(&stored).unwrap(), row);
     assert_eq!(row.to_item().unwrap(), stored);
 

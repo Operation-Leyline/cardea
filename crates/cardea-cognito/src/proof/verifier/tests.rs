@@ -52,8 +52,7 @@ async fn google_accepts_its_bare_issuer() {
     );
 }
 
-/// Leyline's `fresh_signed_proof_is_bound_to_google_client_nonce_and_mailbox`,
-/// for every provider.
+/// For every provider, each case spoils one claim of an otherwise good proof.
 #[tokio::test]
 async fn a_proof_is_bound_to_its_issuer_client_nonce_mailbox_and_time() {
     for provider in Provider::ALL {

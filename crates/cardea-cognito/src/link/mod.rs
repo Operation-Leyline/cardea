@@ -1,6 +1,5 @@
 //! Linking a provider identity to a signed-in account: `CreateIdentityLink`
-//! and `CompleteIdentityLink`. Moved from Leyline's Google link challenge,
-//! with the provider as a parameter.
+//! and `CompleteIdentityLink`, with the provider as a parameter.
 //!
 //! 1. [`create_identity_link`] makes a challenge bound to the caller and a
 //!    fresh nonce, and names the product's client id with the provider.

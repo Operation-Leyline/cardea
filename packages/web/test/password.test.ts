@@ -234,7 +234,7 @@ describe("configuration", () => {
   });
 
   it("scopes storage by prefix, issuer and client", () => {
-    const client = createCardeaClient({ ...CONFIG, storagePrefix: "yoru.auth." });
-    expect(client.config.sessionKey).toBe(`yoru.auth.session.${client.config.issuer}.web-client`);
+    const client = createCardeaClient({ ...CONFIG, storagePrefix: "example-app.auth." });
+    expect(client.config.sessionKey).toBe(`example-app.auth.session.${client.config.issuer}.web-client`);
   });
 });

@@ -376,8 +376,8 @@ already there, which changes nothing.
 ownership row (`EMAIL#…`) for each of them in the table first; with the marker
 alone, their mailboxes look unclaimed. For such a pool, do not run the command
 above: [backfill it](#backfill-an-existing-pool). The construct does not write
-the marker, because it cannot know whether the pool is empty. A table that is
-already in use, such as Leyline's, has its marker.
+the marker, because it cannot know whether the pool is empty. A table that
+an earlier deployment already uses has its marker.
 
 ## Backfill an existing pool
 
@@ -617,7 +617,8 @@ Those changes affect live sign-in, so go in this order:
 Read the changed properties too. The deploy removes or overwrites settings your
 resources have and the construct does not make, such as names, tags or message
 wording; set those again on the resource (`node.defaultChild`). Match the
-options your clients rely on: Leyline's need `adminPasswordSignIn: true`. The
+options your clients rely on: one that signs in with the admin password flow
+(`ALLOW_ADMIN_USER_PASSWORD_AUTH`) needs `adminPasswordSignIn: true`. The
 construct's clients and Google provider also ask for the `profile` scope.
 
 ### 3. Settings that can never change
@@ -642,7 +643,7 @@ Sources: [user pool attributes](https://docs.aws.amazon.com/cognito/latest/devel
 [`UsernameConfiguration`](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cognito-userpool.html#cfn-cognito-userpool-usernameconfiguration),
 and [`UpdateUserPool`](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_UpdateUserPool.html).
 
-## Settings to reproduce without CDK (Yoru, SST/Pulumi)
+## Settings to reproduce without CDK (SST, Pulumi)
 
 **User pool**
 

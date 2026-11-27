@@ -76,8 +76,8 @@ async fn a_sign_in_fills_in_a_missing_address() {
     );
 }
 
-/// A Leyline account with two links and no list: its first sign-in starts the
-/// list with both.
+/// An account from before the list existed, with two links: its first sign-in
+/// starts the list with both.
 #[tokio::test]
 async fn a_first_sign_in_lists_every_identity_the_pool_links() {
     let f = fixture().await;

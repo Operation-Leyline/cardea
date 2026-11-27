@@ -2,7 +2,7 @@
 //! rows and a fake pool. Only the providers' signing keys are replaced: each
 //! proof is a real signed token checked by the real verifier.
 //!
-//! The first group is Leyline's Google link tests, run for every provider.
+//! The first group is the Google link flow's cases, run for every provider.
 
 use aws_sdk_dynamodb::types::AttributeValue as Av;
 use cardea_core::{Directory, Error, Provider, User};

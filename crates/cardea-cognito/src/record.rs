@@ -3,10 +3,10 @@
 //! The partition key, `identityKey`, tells them apart: the readiness marker,
 //! the row that owns a mailbox, the row that owns a provider subject, a link
 //! challenge, and the list of a user's linked identities. The first four are
-//! the wire format of Leyline's live table (a link challenge's `provider` and
-//! the whole list are additions): attribute names, types and key shapes are
-//! frozen by tests, and a row that carries anything else fails to decode. The
-//! table's TTL attribute is `expiresAt`.
+//! the wire format of tables that earlier deployments wrote (a link challenge's
+//! `provider` and the whole list are additions): attribute names, types and key
+//! shapes are frozen by tests, and a row that carries anything else fails to
+//! decode. The table's TTL attribute is `expiresAt`.
 
 use std::marker::PhantomData;
 

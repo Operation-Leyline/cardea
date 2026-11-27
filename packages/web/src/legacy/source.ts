@@ -34,14 +34,36 @@ export function isText(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
-/** The `{ id_token, access_token, refresh_token, subject }` record that hosted sign-in code saved as JSON. */
-export function readTokenJson(raw: string | null): Omit<LegacySession, "method"> | null {
+/** The property names of a token record that old sign-in code saved as JSON. */
+export interface TokenFields {
+  readonly idToken: string;
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly subject: string;
+}
+
+/**
+ * Reads one JSON token record. All four values must be there. A name not given
+ * is the hosted token endpoint's, and `subject` for the signed-in subject.
+ */
+export function readTokenJson(raw: string | null, fields: Partial<TokenFields> = {}): Omit<LegacySession, "method"> | null {
   if (!raw) return null;
+  const names: TokenFields = {
+    idToken: fields.idToken ?? "id_token",
+    accessToken: fields.accessToken ?? "access_token",
+    refreshToken: fields.refreshToken ?? "refresh_token",
+    subject: fields.subject ?? "subject",
+  };
   try {
-    const value = JSON.parse(raw) as Record<string, unknown> | null;
-    const { id_token, access_token, refresh_token, subject } = value ?? {};
-    if (!isText(id_token) || !isText(access_token) || !isText(refresh_token) || !isText(subject)) return null;
-    return { idToken: id_token, accessToken: access_token, refreshToken: refresh_token, subject };
+    const value = (JSON.parse(raw) ?? {}) as Record<string, unknown>;
+    const [idToken, accessToken, refreshToken, subject] = [
+      value[names.idToken],
+      value[names.accessToken],
+      value[names.refreshToken],
+      value[names.subject],
+    ];
+    if (!isText(idToken) || !isText(accessToken) || !isText(refreshToken) || !isText(subject)) return null;
+    return { idToken, accessToken, refreshToken, subject };
   } catch {
     return null;
   }
